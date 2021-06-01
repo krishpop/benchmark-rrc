@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from mp.utils import Transform, keep_state
-from mp.const import MU, VIRTUAL_CUBOID_HALF_SIZE, INIT_JOINT_CONF
+from rrc.mp.utils import Transform, keep_state
+from rrc.mp.const import MU, VIRTUAL_CUBOID_HALF_SIZE, INIT_JOINT_CONF
 from .ik import IKUtils
 from .force_closure import CuboidForceClosureTest, CoulombFriction
 import itertools

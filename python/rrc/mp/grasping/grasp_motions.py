@@ -1,6 +1,6 @@
 from .ik import IKUtils
-from mp.action_sequences import ScriptedActions
-from mp.const import INIT_JOINT_CONF
+from rrc.mp.action_sequences import ScriptedActions
+from rrc.mp.const import INIT_JOINT_CONF
 import numpy as np
 
 

@@ -2,11 +2,11 @@
 import pybullet as p
 import numpy as np
 import time
-from mp.utils import Transform, filter_none_elements, repeat
+from rrc.mp.utils import Transform, filter_none_elements, repeat
 from pybullet_planning import plan_wholebody_motion
 from collections import namedtuple
 from trifinger_simulation.tasks.move_cube import _ARENA_RADIUS, _min_height, _max_height
-from mp.const import COLLISION_TOLERANCE
+from rrc.mp.const import COLLISION_TOLERANCE
 
 from .ik import IKUtils
 from .grasp_sampling import GraspSampler

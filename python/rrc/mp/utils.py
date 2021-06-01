@@ -3,7 +3,7 @@ import numpy as np
 import pybullet as p
 from scipy.spatial.transform import Rotation
 import time
-from mp.align_rotation import get_yaw_diff
+from rrc.mp.align_rotation import get_yaw_diff
 
 
 def set_seed(seed=0):

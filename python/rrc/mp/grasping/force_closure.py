@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.spatial import Delaunay
 from scipy.spatial.qhull import QhullError
-from mp.utils import Transform, get_rotation_between_vecs
+from rrc.mp.utils import Transform, get_rotation_between_vecs
 
 
 class FrictionModel:

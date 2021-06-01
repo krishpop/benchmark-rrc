@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from mp.utils import repeat
-from mp.align_rotation import get_yaw_diff
-from mp.const import TRANSLU_CYAN, CUBOID_SIZE, INIT_JOINT_CONF
+from rrc.mp.utils import repeat
+from rrc.mp.align_rotation import get_yaw_diff
+from rrc.mp.const import TRANSLU_CYAN, CUBOID_SIZE, INIT_JOINT_CONF
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 

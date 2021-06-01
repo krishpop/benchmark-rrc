@@ -3,10 +3,10 @@ import numpy as np
 import pybullet as p
 
 from .state_machine import State
-from mp import base_policies, grasping
-from mp.action_sequences import ScriptedActions
-from mp.const import CONTRACTED_JOINT_CONF, INIT_JOINT_CONF
-from mp.utils import Transform
+from rrc.mp import base_policies, grasping
+from rrc.mp.action_sequences import ScriptedActions
+from rrc.mp.const import CONTRACTED_JOINT_CONF, INIT_JOINT_CONF
+from rrc.mp.utils import Transform
 
 
 class FailureState(State):

@@ -1,4 +1,4 @@
-from mp.utils import Transform, get_rotation_between_vecs
+from rrc.mp.utils import Transform, get_rotation_between_vecs
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 import pybullet as p

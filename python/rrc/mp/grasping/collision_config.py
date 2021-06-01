@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from mp.const import COLLISION_TOLERANCE
+from rrc.mp.const import COLLISION_TOLERANCE
 workspace_id = 0
 
 class CollisionConfig:

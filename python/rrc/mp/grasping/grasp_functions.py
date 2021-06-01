@@ -1,8 +1,8 @@
 from .grasp_sampling import GraspSampler
 from .wholebody_planning import WholeBodyPlanner
-from mp.const import VIRTUAL_CUBOID_HALF_SIZE
-from mp.utils import keep_state
-import mp.align_rotation as rot_util
+from rrc.mp.const import VIRTUAL_CUBOID_HALF_SIZE
+from rrc.mp.utils import keep_state
+import rrc.mp.align_rotation as rot_util
 from scipy.spatial.transform import Rotation as R
 import copy
 import numpy as np

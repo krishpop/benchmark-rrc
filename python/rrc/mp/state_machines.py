@@ -1,4 +1,4 @@
-from mp import states
+from rrc.mp import states
 
 
 class MPStateMachine(states.StateMachine):

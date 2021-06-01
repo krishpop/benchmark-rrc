@@ -1,5 +1,5 @@
-from mp.utils import keep_state
-from mp.const import INIT_JOINT_CONF
+from rrc.mp.utils import keep_state
+from rrc.mp.const import INIT_JOINT_CONF
 import numpy as np
 
 

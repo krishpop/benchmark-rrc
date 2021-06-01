@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from mp.states import MoveToGoalState
-from mp.base_policies import PlanningAndForceControlPolicy
+from rrc.mp.states import MoveToGoalState
+from rrc.mp.base_policies import PlanningAndForceControlPolicy
 
 
 def set_hyperparams(simulation):

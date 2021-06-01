@@ -17,7 +17,7 @@ import pybullet_data
 import trifinger_simulation
 from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
-from mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
+from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 import pybullet as p
 import pybullet
 
@@ -44,6 +44,7 @@ class ActionType(enum.Enum):
     #: the position controller are added to the torques in the action before
     #: applying them to the robot.
     TORQUE_AND_POSITION = enum.auto()
+
 
 class CubeEnv(gym.GoalEnv):
     def __init__(
@@ -187,17 +188,20 @@ class CubeEnv(gym.GoalEnv):
                     action[:3], [0,0,0], p.LINK_FRAME)
             p.applyExternalTorque(self.cube.block, -1,
                     action[3:], p.LINK_FRAME)
+
+            pybullet.stepSimulation(
+                physicsClientId=self._pybullet_client_id,
+            )
             observation = self._create_observation(action)
             self.observation_list.append(observation)
 
             if self.prev_observation is None:
                 self.prev_observation = observation
-            reward = 0
-            # reward += self._compute_reward(
-            #     self.prev_observation,
-            #     observation,
-            #     self.info
-            # )
+            reward += self._compute_reward(
+                self.prev_observation,
+                observation,
+                self.info
+            )
             self.prev_observation = observation
 
             self.step_count += 1  # t
