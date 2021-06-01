@@ -7,17 +7,23 @@ import pickle as pkl
 import gym
 import numpy as np
 
-import robot_interfaces
-import robot_fingers
+try:
+    import robot_interfaces
+    import robot_fingers
+except:
+    robot_fingers = robot_interfaces = False
+
+import pybullet_data
 import trifinger_simulation
-from trifinger_simulation import trifingerpro_limits
+from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
 from mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 import pybullet as p
+import pybullet
 
 from .reward_fns import competition_reward
 from .pinocchio_utils import PinocchioUtils
-from .viz import Viz, CuboidMarker
+from .viz import Viz, CuboidMarker, CubeMarker
 import time
 
 
@@ -38,6 +44,309 @@ class ActionType(enum.Enum):
     #: the position controller are added to the torques in the action before
     #: applying them to the robot.
     TORQUE_AND_POSITION = enum.auto()
+
+class CubeEnv(gym.GoalEnv):
+    def __init__(
+        self,
+        cube_goal_pose: dict,
+        goal_difficulty: int,
+        frameskip: int = 1,
+        sim: bool = False,
+        visualization: bool = False,
+        reward_fn: callable = competition_reward,
+        termination_fn: callable = None,
+        initializer: callable = None,
+        episode_length: int = move_cube.episode_length,
+        path: str = None,
+    ):
+        """Initialize.
+
+        Args:
+            cube_goal_pose (dict): Goal pose for the cube.  Dictionary with
+                keys "position" and "orientation".
+            goal_difficulty (int): Difficulty level of the goal (needed for
+                reward computation).
+            frameskip (int):  Number of actual control steps to be performed in
+                one call of step().
+        """
+        # Basic initialization
+        # ====================
+        self.path=path
+
+        self._compute_reward = reward_fn
+        self._termination_fn = termination_fn if sim else None
+        self.initializer = initializer if sim else None
+        self.goal = {k: np.array(v) for k, v in cube_goal_pose.items()}
+        self.info = {"difficulty": goal_difficulty}
+        self.difficulty = goal_difficulty
+
+        # TODO: The name "frameskip" makes sense for an atari environment but
+        # not really for our scenario.  The name is also misleading as
+        # "frameskip = 1" suggests that one frame is skipped while it actually
+        # means "do one step per step" (i.e. no skip).
+        if frameskip < 1:
+            raise ValueError("frameskip cannot be less than 1.")
+        self.frameskip = frameskip
+
+        # will be initialized in reset()
+        self.simulation = sim
+        self.visualization = visualization
+        self.episode_length = episode_length
+        self.custom_logs = {}
+        self.reward_list = []
+        self.observation_list = []
+        self.change_goal_last = -1 # needed for evaluation
+        self.reach_finish_point = -1 # needed for evaluation
+        self.reach_start_point = -1 # needed for evaluation
+        self.init_align_obj_error = -1 # needed for evaluation
+        self.init_obj_pose = None # needed for evaluation
+        self.align_obj_error = -1 # needed for evaluation
+        self.goal_list = [] # needed for multiple goal environments
+        self.cube = None
+        self.time_step_s = 0.004
+        if self.visualization:
+            self.cube_viz = Viz()
+
+        # Create the action and observation spaces
+        # ========================================
+
+        object_state_space = gym.spaces.Dict(
+            {
+                "position": gym.spaces.Box(
+                    low=trifingerpro_limits.object_position.low,
+                    high=trifingerpro_limits.object_position.high,
+                ),
+                "orientation": gym.spaces.Box(
+                    low=trifingerpro_limits.object_orientation.low,
+                    high=trifingerpro_limits.object_orientation.high,
+                ),
+            }
+        )
+
+        # verify that the given goal pose is contained in the cube state space
+        if not object_state_space.contains(self.goal):
+            raise ValueError("Invalid goal pose.")
+
+        self.action_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
+        self.initial_action = np.zeros(6)
+        self.observation_space = gym.spaces.Dict(
+            {
+                "observation": gym.spaces.Dict(
+                    {
+                        "position": object_state_space.spaces['position'],
+                        "velocity": gym.spaces.Box(low=-np.ones(3), high=np.ones(3)),
+                    }
+                ),
+                "action": self.action_space,
+                "desired_goal": object_state_space,
+                "achieved_goal": object_state_space,
+            }
+        )
+
+        self.prev_observation = None
+        self._prev_step_report = 0
+
+    def step(self, action):
+        """Run one timestep of the environment's dynamics.
+
+        When end of episode is reached, you are responsible for calling
+        ``reset()`` to reset this environment's state.
+
+        Args:
+            action: An action provided by the agent (depends on the selected
+                :class:`ActionType`).
+
+        Returns:
+            tuple:
+
+            - observation (dict): agent's observation of the current
+              environment.
+            - reward (float) : amount of reward returned after previous action.
+            - done (bool): whether the episode has ended, in which case further
+              step() calls will return undefined results.
+            - info (dict): info dictionary containing the difficulty level of
+              the goal.
+        """
+        if not self.action_space.contains(action):
+            raise ValueError(
+                "Given action is not contained in the action space."
+            )
+
+        num_steps = self.frameskip
+
+        # ensure episode length is not exceeded due to frameskip
+        step_count_after = self.step_count + num_steps
+        if step_count_after > self.episode_length:
+            excess = step_count_after - self.episode_length
+            num_steps = max(1, num_steps - excess)
+
+        reward = 0.0
+        for _ in range(num_steps):
+            # send action to robot
+            p.applyExternalForce(self.cube.block, -1,
+                    action[:3], [0,0,0], p.LINK_FRAME)
+            p.applyExternalTorque(self.cube.block, -1,
+                    action[3:], p.LINK_FRAME)
+            observation = self._create_observation(action)
+            self.observation_list.append(observation)
+
+            if self.prev_observation is None:
+                self.prev_observation = observation
+            reward = 0
+            # reward += self._compute_reward(
+            #     self.prev_observation,
+            #     observation,
+            #     self.info
+            # )
+            self.prev_observation = observation
+
+            self.step_count += 1  # t
+            # make sure to not exceed the episode length
+            if self.step_count >= self.episode_length - 1:
+                break
+
+        is_done = self.step_count >= self.episode_length
+        if self._termination_fn is not None:
+            is_done = is_done or self._termination_fn(observation)
+
+        # report current step_count
+        if self.step_count - self._prev_step_report > 200:
+            print('current step_count:', self.step_count)
+            self._prev_step_report = self.step_count
+
+        if is_done:
+            print('is_done is True. Episode terminates.')
+            print('episode length', self.episode_length)
+            print('step_count', self.step_count)
+            # self.save_custom_logs()
+
+        if self.visualization:
+            self.cube_viz.update_cube_orientation(
+                observation['achieved_goal']['position'],
+                observation['achieved_goal']['orientation'],
+                observation['desired_goal']['position'],
+                observation['desired_goal']['orientation']
+            )
+            time.sleep(0.01)
+
+        self.reward_list.append(reward)
+
+        return observation, reward, is_done, self.info.copy()
+
+    def reset(self):
+        # By changing the `_reset_*` method below you can switch between using
+        # the platform frontend, which is needed for the submission system, and
+        # the direct simulation, which may be more convenient if you want to
+        # pre-train locally in simulation.
+        self._reset_direct_simulation()
+        if self.visualization:
+            self.cube_viz.reset()
+
+        self.step_count = 0
+
+        # need to already do one step to get initial observation
+        # TODO disable frameskip here?
+        self.prev_observation, _, _, _ = self.step(self.initial_action)
+        return self.prev_observation
+
+    @staticmethod
+    def __connect_to_pybullet(enable_visualization):
+        """
+        Connect to the Pybullet client via either GUI (visual rendering
+        enabled) or DIRECT (no visual rendering) physics servers.
+
+        In GUI connection mode, use ctrl or alt with mouse scroll to adjust
+        the view of the camera.
+        """
+        if enable_visualization:
+            pybullet_client_id = pybullet.connect(pybullet.GUI)
+        else:
+            pybullet_client_id = pybullet.connect(pybullet.DIRECT)
+
+        return pybullet_client_id
+
+    def __setup_pybullet_simulation(self):
+        """
+        Set the physical parameters of the world in which the simulation
+        will run, and import the models to be simulated
+        """
+        pybullet.setAdditionalSearchPath(
+            pybullet_data.getDataPath(),
+            physicsClientId=self._pybullet_client_id,
+        )
+        pybullet.setGravity(
+            0,
+            0,
+            -9.81,
+            physicsClientId=self._pybullet_client_id,
+        )
+        pybullet.setTimeStep(
+            self.time_step_s, physicsClientId=self._pybullet_client_id
+        )
+
+        pybullet.loadURDF(
+            "plane_transparent.urdf",
+            [0, 0, 0],
+            physicsClientId=self._pybullet_client_id,
+        )
+
+    def _reset_direct_simulation(self):
+        """Reset direct simulation.
+
+        With this the env can be used without backend.
+        """
+
+        # reset simulation
+        del self.cube
+
+        self._pybullet_client_id = self.__connect_to_pybullet(
+            enable_visualization=self.visualization
+        )
+        self.__setup_pybullet_simulation()
+
+        # initialize simulation
+        if self.initializer is None:
+            initial_object_pose = move_cube.sample_goal(difficulty=-1)
+        else:
+            initial_object_pose = self.initializer.get_initial_state()
+            self.goal = self.initializer.get_goal().to_dict()
+
+        self.cube = collision_objects.Cube(
+            position=initial_object_pose.position,
+            orientation=initial_object_pose.orientation,
+            pybullet_client_id=self._pybullet_client_id,
+        )
+
+       # use mass of real cube
+        p.changeDynamics(bodyUniqueId=self.cube.block, linkIndex=-1,
+                         physicsClientId=self._pybullet_client_id,
+                         mass=0.08)
+        # p.setTimeStep(0.001)
+        # visualize the goal
+        if self.visualization:
+            self.goal_marker = CubeMarker(
+                width=0.065,
+                position=self.goal["position"],
+                orientation=self.goal["orientation"],
+                pybullet_client_id=self._pybullet_client_id,
+            )
+
+    def _create_observation(self, action):
+        cube_state = self.cube.get_state()
+        position = np.asarray(cube_state[0])
+        orientation = np.asarray(cube_state[1])
+        velocity = p.getBaseVelocity(
+            self.cube.block,
+            physicsClientId=self.cube._pybullet_client_id,
+        )
+        return {'achieved_goal':
+                {'position': position, 'orientation': orientation},
+                'desired_goal': self.goal,
+                'action': action,
+                'observation': {'position': position,
+                                'orientation': orientation,
+                                'velocity': velocity}
+                }
 
 
 class RealRobotCubeEnv(gym.GoalEnv):
