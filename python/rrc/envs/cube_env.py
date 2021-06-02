@@ -20,11 +20,12 @@ from trifinger_simulation.tasks import move_cube
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
 import pybullet as p
-import pybullet
 import os.path as osp
+import inspect
 
 from .reward_fns import competition_reward
 from .pinocchio_utils import PinocchioUtils
+from .initializers import random_init, training_init, centered_init
 from .viz import Viz, CuboidMarker, CubeMarker
 import time
 
@@ -57,7 +58,7 @@ class CubeEnv(gym.GoalEnv):
         visualization: bool = False,
         reward_fn: callable = competition_reward,
         termination_fn: callable = None,
-        initializer: callable = None,
+        initializer: callable = centered_init,
         episode_length: int = move_cube.episode_length,
         path: str = None,
         save_mp4: bool = False,
@@ -79,7 +80,10 @@ class CubeEnv(gym.GoalEnv):
 
         self._compute_reward = reward_fn
         self._termination_fn = termination_fn
-        self.initializer = initializer
+        if initializer is not None and inspect.isclass(initializer):
+            self.initializer = initializer(goal_difficulty)
+        else:
+            self.initializer = initializer
         if cube_goal_pose:
             self.goal = {k: np.array(v) for k, v in cube_goal_pose.items()}
             self.default_goal = {k: np.array(v) for k, v in cube_goal_pose.items()}
@@ -96,6 +100,10 @@ class CubeEnv(gym.GoalEnv):
         if frameskip < 1:
             raise ValueError("frameskip cannot be less than 1.")
         self.frameskip = frameskip
+
+        # Setup mp4 saving 
+        # ================
+
         self.save_mp4 = save_mp4
         self.save_dir = save_dir
         if save_dir is not None and not osp.exists(save_dir):
@@ -108,15 +116,6 @@ class CubeEnv(gym.GoalEnv):
         # will be initialized in reset()
         self.visualization = visualization
         self.episode_length = episode_length
-        self.custom_logs = {}
-        self.reward_list = []
-        self.observation_list = []
-        self.change_goal_last = -1 # needed for evaluation
-        self.reach_finish_point = -1 # needed for evaluation
-        self.reach_start_point = -1 # needed for evaluation
-        self.init_align_obj_error = -1 # needed for evaluation
-        self.init_obj_pose = None # needed for evaluation
-        self.align_obj_error = -1 # needed for evaluation
         self.goal_list = [] # needed for multiple goal environments
         self.cube = None
         self.time_step_s = 0.004
@@ -138,10 +137,6 @@ class CubeEnv(gym.GoalEnv):
                 ),
             }
         )
-
-        # verify that the given goal pose is contained in the cube state space
-        if not object_state_space.contains(self.goal):
-            raise ValueError("Invalid goal pose.")
 
         self.action_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
         self.initial_action = np.zeros(6)
@@ -220,11 +215,10 @@ class CubeEnv(gym.GoalEnv):
             p.applyExternalTorque(self.cube.block, -1,
                     action[3:], p.LINK_FRAME)
 
-            pybullet.stepSimulation(
+            p.stepSimulation(
                 physicsClientId=self._pybullet_client_id,
             )
             observation = self._create_observation(action)
-            self.observation_list.append(observation)
 
             if self.prev_observation is None:
                 self.prev_observation = observation
@@ -243,17 +237,9 @@ class CubeEnv(gym.GoalEnv):
         is_done = self.step_count >= self.episode_length - 1
         if self._termination_fn is not None:
             is_done = is_done or self._termination_fn(observation)
-
-        # report current step_count
-        if self.step_count - self._prev_step_report > 200:
-            # print('current step_count:', self.step_count)
-            self._prev_step_report = self.step_count
-
-        #if is_done:
-            # print('is_done is True. Episode terminates.')
-            # print('episode length', self.episode_length)
-            # print('step_count', self.step_count)
-            # self.save_custom_logs()
+        if not self.observation_space['position'].contains(observation['position']):
+            is_done = True
+            reward = -100  # try making length of episode * min reward
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
@@ -263,8 +249,6 @@ class CubeEnv(gym.GoalEnv):
                 observation['desired_goal']['orientation']
             )
             time.sleep(0.01)
-
-        self.reward_list.append(reward)
 
         return observation, reward, is_done, self.info.copy()
 
@@ -294,10 +278,10 @@ class CubeEnv(gym.GoalEnv):
         the view of the camera.
         """
         if enable_visualization:
-            pybullet_client_id = pybullet.connect(pybullet.GUI)
+            pybullet_client_id = p.connect(p.GUI)
         else:
-            pybullet_client_id = pybullet.connect(pybullet.DIRECT)
-        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
+            pybullet_client_id = p.connect(p.DIRECT)
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         return pybullet_client_id
 
     def __setup_pybullet_simulation(self):
@@ -305,30 +289,25 @@ class CubeEnv(gym.GoalEnv):
         Set the physical parameters of the world in which the simulation
         will run, and import the models to be simulated
         """
-        pybullet.setAdditionalSearchPath(
+        p.setAdditionalSearchPath(
             pybullet_data.getDataPath(),
             physicsClientId=self._pybullet_client_id,
         )
-        pybullet.setGravity(
+        p.setGravity(
             0,
             0,
             -9.81,
             physicsClientId=self._pybullet_client_id,
         )
-        pybullet.setTimeStep(
+        p.setTimeStep(
             self.time_step_s, physicsClientId=self._pybullet_client_id
         )
 
-        pybullet.loadURDF(
+        p.loadURDF(
             "plane_transparent.urdf",
             [0, 0, 0],
             physicsClientId=self._pybullet_client_id,
         )
-
-    def create_single_player_scene(self, bullet_client):
-        # Load arena
-        return PlanarRobotEmptyScene(bullet_client, gravity=0,
-                timestep=self.time_step_s, frame_skip=self.frameskip)
 
     def _reset_direct_simulation(self):
         """Reset direct simulation.
@@ -351,8 +330,12 @@ class CubeEnv(gym.GoalEnv):
             initial_object_pose = self.initializer.get_initial_state()
             if self.default_goal is None:
                 self.goal = self.initializer.get_goal().to_dict()
+                self.goal_list.append(self.goal)
             else:
                 self.goal = self.default_goal
+
+        if not self.observation_space['desired_goal'].contains(self.goal):
+            raise ValueError("Invalid goal pose.")
 
         self.cube = collision_objects.Cube(
             position=initial_object_pose.position,
