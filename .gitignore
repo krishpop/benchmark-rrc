@@ -133,3 +133,5 @@ dmypy.json
 
 # Vim
 *.swp
+
+**videos/

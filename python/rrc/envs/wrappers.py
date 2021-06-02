@@ -4,7 +4,7 @@ import numpy as np
 import gym
 import time
 import cv2
-from env.cube_env import ActionType
+from rrc.envs.cube_env import ActionType
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation import camera
 

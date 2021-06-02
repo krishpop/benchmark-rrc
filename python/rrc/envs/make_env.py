@@ -3,7 +3,7 @@ import env.wrappers as wrappers
 
 
 def get_initializer(name):
-    from env import initializers
+    from rrc.envs import initializers
     if name is None:
         return None
     if hasattr(initializers, name):

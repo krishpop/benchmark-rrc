@@ -5,6 +5,9 @@ from trifinger_simulation.trifinger_platform import TriFingerPlatform
 
 COLLISION_TOLERANCE = 3.5 * 1e-03
 MU = 0.5
+CUBE_WIDTH = 0.065
+CUBE_HALF_WIDTH = 0.0325
+CUBE_MASS = 0.08
 CUBOID_SIZE = np.array((0.065, 0.065, 0.065))
 CUBOID_HALF_SIZE = CUBOID_SIZE / 2
 CUBOID_MASS = 0.094

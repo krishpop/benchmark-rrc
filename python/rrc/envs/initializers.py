@@ -10,8 +10,8 @@ from trifinger_simulation.tasks import move_cube
 from trifinger_simulation.tasks.move_cube import Pose
 from scipy.spatial.transform import Rotation
 from trifinger_simulation.tasks.move_cube import _ARENA_RADIUS, _max_height
-from mp.align_rotation import project_cube_xy_plane
-from mp.utils import sample_uniform_from_circle
+from rrc.mp.align_rotation import project_cube_xy_plane
+from rrc.mp.utils import sample_uniform_from_circle
 import numpy as np
 import random
 import pickle as pkl
