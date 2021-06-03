@@ -25,7 +25,7 @@ import inspect
 
 from .reward_fns import competition_reward
 from .pinocchio_utils import PinocchioUtils
-from .initializers import random_init, training_init, centered_init
+from .initializers import random_init, training_init, centered_init, fixed_g_init
 from .viz import Viz, CuboidMarker, CubeMarker
 import time
 
@@ -54,11 +54,12 @@ class CubeEnv(gym.GoalEnv):
         self,
         cube_goal_pose: dict,
         goal_difficulty: int,
+        drop_pen: float = -100.,
         frameskip: int = 1,
         visualization: bool = False,
         reward_fn: callable = competition_reward,
         termination_fn: callable = None,
-        initializer: callable = centered_init,
+        initializer: callable = fixed_g_init,
         episode_length: int = move_cube.episode_length,
         path: str = None,
         save_mp4: bool = False,
@@ -92,6 +93,7 @@ class CubeEnv(gym.GoalEnv):
             self.default_goal = None
         self.info = {"difficulty": goal_difficulty}
         self.difficulty = goal_difficulty
+        self.drop_pen = drop_pen
 
         # TODO: The name "frameskip" makes sense for an atari environment but
         # not really for our scenario.  The name is also misleading as
@@ -140,6 +142,7 @@ class CubeEnv(gym.GoalEnv):
 
         self.action_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
         self.initial_action = np.zeros(6)
+        self._pybullet_client_id = None
         self.observation_space = gym.spaces.Dict(
             {
                 "observation": gym.spaces.Dict(
@@ -234,12 +237,13 @@ class CubeEnv(gym.GoalEnv):
             if self.step_count >= self.episode_length - 1:
                 break
 
-        is_done = self.step_count >= self.episode_length - 1
+        is_done = self.step_count >= self.episode_length
         if self._termination_fn is not None:
             is_done = is_done or self._termination_fn(observation)
-        if not self.observation_space['position'].contains(observation['position']):
+
+        if not self.observation_space['observation']['position'].contains(observation['observation']['position']):
             is_done = True
-            reward = -100  # try making length of episode * min reward
+            reward = self.drop_pen  # try making length of episode * min reward
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
@@ -257,6 +261,7 @@ class CubeEnv(gym.GoalEnv):
         # the platform frontend, which is needed for the submission system, and
         # the direct simulation, which may be more convenient if you want to
         # pre-train locally in simulation.
+        self.mp4_logging = False
         self._reset_direct_simulation()
         if self.visualization:
             self.cube_viz.reset()
@@ -309,6 +314,17 @@ class CubeEnv(gym.GoalEnv):
             physicsClientId=self._pybullet_client_id,
         )
 
+    def _disconnect_from_pybullet(self):
+        """Disconnect from the simulation.
+
+        Disconnects from the simulation and sets simulation to disabled to
+        avoid any further function calls to it.
+        """
+        if self._pybullet_client_id is not None and p.isConnected(physicsClientId=self._pybullet_client_id):
+            p.disconnect(
+                physicsClientId=self._pybullet_client_id,
+            )
+
     def _reset_direct_simulation(self):
         """Reset direct simulation.
 
@@ -317,6 +333,8 @@ class CubeEnv(gym.GoalEnv):
 
         # reset simulation
         del self.cube
+
+        self._disconnect_from_pybullet()
 
         self._pybullet_client_id = self.__connect_to_pybullet(
             enable_visualization=self.visualization

@@ -11,6 +11,7 @@ from trifinger_simulation.tasks.move_cube import Pose
 from scipy.spatial.transform import Rotation
 from trifinger_simulation.tasks.move_cube import _ARENA_RADIUS, _max_height
 from rrc.mp.align_rotation import project_cube_xy_plane
+from rrc.mp.const import CUBE_HALF_WIDTH
 from rrc.mp.utils import sample_uniform_from_circle
 import numpy as np
 import random
@@ -33,7 +34,11 @@ class RandomInitializer:
 
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
-        return move_cube.sample_goal(difficulty=self.difficulty)
+        goal = move_cube.sample_goal(difficulty=self.difficulty)
+        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        return goal
+
+
 
 
 class EvalEpisodesInitializer:
@@ -212,9 +217,24 @@ class BOInitializer:
         return ex_state
 
 
+class FixedGoalInitializer(RandomInitializer):
+    def __init__(self, difficulty, default_goal=None):
+        if default_goal is None:
+            default_goal = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
+                            'orientation': np.array([0,0,0,1])}
+        self.default_goal = default_goal
+        super().__init__(difficulty)
+
+    def get_goal(self):
+        goal = move_cube.Pose.from_dict(self.default_goal)
+        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        return goal
+
+
 random_init = RandomInitializer
 eval_init = EvalEpisodesInitializer
 small_rot_init = Task4SmallRotation
 training_init = TrainingInitializer
 centered_init = CenteredInitializer
 bo_init = BOInitializer
+fixed_g_init = FixedGoalInitializer
