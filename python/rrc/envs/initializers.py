@@ -39,8 +39,6 @@ class RandomInitializer:
         return goal
 
 
-
-
 class EvalEpisodesInitializer:
     '''Initialize episodes according to json files saved in eval_episodes'''
 
@@ -142,6 +140,8 @@ class TrainingInitializer:
         """Get a random initial object pose (always on the ground)."""
         init = move_cube.sample_goal(difficulty=-1)
         init.position[:2] = sample_uniform_from_circle(0.07)
+        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
+
         if self.difficulty == 4:
             self.goal = move_cube.sample_goal(self.difficulty)
 
@@ -166,6 +166,7 @@ class TrainingInitializer:
                 self.goal = None
         else:
             goal = move_cube.sample_goal(difficulty=self.difficulty)
+        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
         return goal
 
 
@@ -179,11 +180,14 @@ class CenteredInitializer:
         """Get a random initial object pose (always on the ground)."""
         init = move_cube.sample_goal(difficulty=-1)
         init.position[:2] = sample_uniform_from_circle(0.10)
+        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
         return init
 
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
-        return move_cube.sample_goal(difficulty=self.difficulty)
+        goal = move_cube.sample_goal(difficulty=self.difficulty)
+        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        return goal
 
 
 class BOInitializer:
@@ -224,6 +228,11 @@ class FixedGoalInitializer(RandomInitializer):
                             'orientation': np.array([0,0,0,1])}
         self.default_goal = default_goal
         super().__init__(difficulty)
+
+    def get_initial_state(self):
+        init = super().get_initial_state()
+        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
+        return init
 
     def get_goal(self):
         goal = move_cube.Pose.from_dict(self.default_goal)

@@ -3,6 +3,7 @@ import os
 import enum
 import shelve
 import pickle as pkl
+import copy
 
 import gym
 import numpy as np
@@ -22,12 +23,15 @@ from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
 import pybullet as p
 import os.path as osp
 import inspect
+import dm_control.utils.rewards as dmr
+from scipy.spatial.transform import Rotation
+from xvfbwrapper import Xvfb
+import time
 
-from .reward_fns import competition_reward
+from .reward_fns import competition_reward, _orientation_error, gaussian_reward
 from .pinocchio_utils import PinocchioUtils
 from .initializers import random_init, training_init, centered_init, fixed_g_init
 from .viz import Viz, CuboidMarker, CubeMarker
-import time
 
 
 class ActionType(enum.Enum):
@@ -49,6 +53,41 @@ class ActionType(enum.Enum):
     TORQUE_AND_POSITION = enum.auto()
 
 
+def training_reward1(previous_observation, observation, info):
+    r = competition_reward(previous_observation, observation, info)
+    action = observation['observation']['action']
+    reg = .1 * np.linalg.norm(action)
+    return r - reg
+
+
+def training_reward2(previous_observation, observation, info):
+    pos_err = _orientation_error(observation)
+    ori_err = _position_error(observation)
+    r = dmr.tolerance(pos_err, bounds=(0, 0.05), margin=0.05)
+    r += dmr.tolerance(ori_err, bounds=(0, 0.05), margin=0.05)
+    # r = pos_err <= 0.05
+    # r += ori_err <= 0.05
+    return r
+
+
+def _position_error(observation):
+    range_xy_dist = 0.195 * 2
+    xy_dist = np.linalg.norm(
+            observation['desired_goal']['position'][:2]
+            - observation['achieved_goal']['position'][:2]
+        )
+    pos_err = xy_dist / range_xy_dist
+    return pos_err
+
+
+def termination_fn(observation):
+    low, high = trifingerpro_limits.object_position.low, trifingerpro_limits.object_position.high,
+    curr_pos = observation['achieved_goal']['position']
+    if not np.all(np.clip(curr_pos, low, high) == curr_pos):
+        return True
+    return False
+
+
 class CubeEnv(gym.GoalEnv):
     def __init__(
         self,
@@ -57,13 +96,11 @@ class CubeEnv(gym.GoalEnv):
         drop_pen: float = -100.,
         frameskip: int = 1,
         visualization: bool = False,
-        reward_fn: callable = competition_reward,
+        relative_goal: bool = False,
+        reward_fn: callable = training_reward2,
         termination_fn: callable = None,
         initializer: callable = fixed_g_init,
         episode_length: int = move_cube.episode_length,
-        path: str = None,
-        save_mp4: bool = False,
-        save_dir: str = None
     ):
         """Initialize.
 
@@ -77,7 +114,6 @@ class CubeEnv(gym.GoalEnv):
         """
         # Basic initialization
         # ====================
-        self.path=path
 
         self._compute_reward = reward_fn
         self._termination_fn = termination_fn
@@ -91,6 +127,7 @@ class CubeEnv(gym.GoalEnv):
         else:
             self.goal = None
             self.default_goal = None
+        self.relative_goal = relative_goal
         self.info = {"difficulty": goal_difficulty}
         self.difficulty = goal_difficulty
         self.drop_pen = drop_pen
@@ -102,18 +139,6 @@ class CubeEnv(gym.GoalEnv):
         if frameskip < 1:
             raise ValueError("frameskip cannot be less than 1.")
         self.frameskip = frameskip
-
-        # Setup mp4 saving 
-        # ================
-
-        self.save_mp4 = save_mp4
-        self.save_dir = save_dir
-        if save_dir is not None and not osp.exists(save_dir):
-            os.makedirs(save_dir)
-        self.mp4_logging = False
-
-        if save_mp4: 
-            assert osp.exists(save_dir), f"save_dir {save_dir} not initialized or given"
 
         # will be initialized in reset()
         self.visualization = visualization
@@ -149,9 +174,9 @@ class CubeEnv(gym.GoalEnv):
                     {
                         "position": object_state_space.spaces['position'],
                         "velocity": gym.spaces.Box(low=-np.ones(6), high=np.ones(6)),
-                        "orientation": object_state_space.spaces['orientation']}
+                        "orientation": object_state_space.spaces['orientation'],
+                        "action": self.action_space},
                 ),
-                "action": self.action_space,
                 "desired_goal": object_state_space,
                 "achieved_goal": object_state_space,
             }
@@ -160,16 +185,24 @@ class CubeEnv(gym.GoalEnv):
         self.prev_observation = None
         self._prev_step_report = 0
 
-    def start_mp4_rendering(self):
-        # MP4 logging
-        if self.save_mp4:
-            filepath = lambda i: osp.join(self.save_dir, f"sim-{i}.mp4")
-            for i in range(25):
-                if not osp.exists(filepath(i)):
-                  break
-            filepath = filepath(i)
-            p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, filepath)
-        return
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        if not isinstance(info, dict):
+            obs = [d['obs'] for d in info]
+            for i, d in enumerate(obs):
+                virtual_goal = desired_goal[i]
+                if not isinstance(desired_goal, dict):
+                    virtual_goal = {'position': virtual_goal[4:],
+                                    'orientation': virtual_goal[:4]}
+                d['desired_goal'] = virtual_goal
+            return np.array([self._compute_reward({}, o, i)
+                             for o, i in zip(obs, info)])
+        else:
+            p_obs, obs = {}, info['obs']
+            if not isinstance(desired_goal, dict):
+                desired_goal = {'position': desired_goal[4:] ,'orientation': desired_goal[:4]}
+            obs['desired_goal'] = desired_goal
+            obs['action'] = info['action']
+            return self._compute_reward(p_obs, obs, info)
 
     def step(self, action):
         """Run one timestep of the environment's dynamics.
@@ -193,10 +226,9 @@ class CubeEnv(gym.GoalEnv):
               the goal.
         """
         action = np.clip(action, -1, 1)
-        if not self.mp4_logging:
-            self.start_mp4_rendering()
-            self.mp4_logging = True
-
+        action[:2] *= .2
+        action[3:] *= .2
+        # action *= .2
         if not self.action_space.contains(action):
             raise ValueError(
                 "Given action is not contained in the action space."
@@ -206,11 +238,12 @@ class CubeEnv(gym.GoalEnv):
 
         # ensure episode length is not exceeded due to frameskip
         step_count_after = self.step_count + num_steps
-        if step_count_after > self.episode_length:
-            excess = step_count_after - self.episode_length
+        if step_count_after > self.episode_length + 1:
+            excess = step_count_after - self.episode_length + 1
             num_steps = max(1, num_steps - excess)
 
         reward = 0.0
+        p_obs = None
         for _ in range(num_steps):
             # send action to robot
             p.applyExternalForce(self.cube.block, -1,
@@ -230,6 +263,7 @@ class CubeEnv(gym.GoalEnv):
                 observation,
                 self.info
             )
+            p_obs = self.prev_observation.copy()
             self.prev_observation = observation
 
             self.step_count += 1  # t
@@ -237,13 +271,17 @@ class CubeEnv(gym.GoalEnv):
             if self.step_count >= self.episode_length - 1:
                 break
 
-        is_done = self.step_count >= self.episode_length
+        is_done = self.step_count >= self.episode_length + 1
         if self._termination_fn is not None:
             is_done = is_done or self._termination_fn(observation)
 
-        if not self.observation_space['observation']['position'].contains(observation['observation']['position']):
-            is_done = True
-            reward = self.drop_pen  # try making length of episode * min reward
+        info = self.info.copy()
+        info['ori_err'] = _orientation_error(observation)
+        info['pos_err'] = _position_error(observation)
+        # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
+        # info['p_obs'] = {k: p_obs[k] for k in []}
+        info['obs'] = {k: observation[k] for k in ['desired_goal', 'achieved_goal']}
+        info['obs']['observation'] = {'action': observation['observation']['action']}
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
@@ -254,14 +292,16 @@ class CubeEnv(gym.GoalEnv):
             )
             time.sleep(0.01)
 
-        return observation, reward, is_done, self.info.copy()
+        if is_done:
+            self._disconnect_from_pybullet()
+
+        return observation, reward, is_done, info
 
     def reset(self):
         # By changing the `_reset_*` method below you can switch between using
         # the platform frontend, which is needed for the submission system, and
         # the direct simulation, which may be more convenient if you want to
         # pre-train locally in simulation.
-        self.mp4_logging = False
         self._reset_direct_simulation()
         if self.visualization:
             self.cube_viz.reset()
@@ -313,6 +353,7 @@ class CubeEnv(gym.GoalEnv):
             [0, 0, 0],
             physicsClientId=self._pybullet_client_id,
         )
+        self.__load_stage()
 
     def _disconnect_from_pybullet(self):
         """Disconnect from the simulation.
@@ -379,21 +420,74 @@ class CubeEnv(gym.GoalEnv):
 
     def _create_observation(self, action):
         cube_state = self.cube.get_state()
-        position = np.asarray(cube_state[0])
-        orientation = np.asarray(cube_state[1])
+        obs_pos = position = np.asarray(cube_state[0])
+        obs_rot = orientation = np.asarray(cube_state[1])
         velocity = p.getBaseVelocity(
             self.cube.block,
             physicsClientId=self.cube._pybullet_client_id,
         )
         velocity = np.concatenate([np.array(a) for a in velocity])
+
+        if self.relative_goal:
+            obs_pos = position - self.goal['position']
+            goal_rot = Rotation.from_quat(self.goal['orientation'])
+            actual_rot = Rotation.from_quat(obs_rot)
+            obs_rot = (goal_rot*actual_rot.inv()).as_quat()
         return {'achieved_goal':
                 {'position': position, 'orientation': orientation},
                 'desired_goal': self.goal,
-                'action': action,
-                'observation': {'position': position,
-                                'orientation': orientation,
-                                'velocity': velocity}
+                'observation': {'position': obs_pos,
+                                'orientation': obs_rot,
+                                'velocity': velocity,
+                                'action': action}
                 }
+
+    def __load_stage(self, high_border=True):
+        """Create the stage (table and boundary).
+
+        Args:
+            high_border:  Only used for the TriFinger.  If set to False, the
+                old, low boundary will be loaded instead of the high one.
+        """
+
+        def mesh_path(filename):
+            trifinger_path = osp.split(trifinger_simulation.__file__)[0]
+            robot_properties_path = osp.join(trifinger_path, "robot_properties_fingers")
+            return os.path.join(
+                robot_properties_path, "meshes", "stl", filename
+            )
+
+        table_colour = (0.18, 0.15, 0.19, 1.0)
+        high_border_colour = (0.73, 0.68, 0.72, 1.0)
+        if high_border:
+            collision_objects.import_mesh(
+                mesh_path("trifinger_table_without_border.stl"),
+                position=[0, 0, 0],
+                is_concave=False,
+                color_rgba=table_colour,
+                pybullet_client_id=self._pybullet_client_id,
+            )
+            collision_objects.import_mesh(
+                mesh_path("high_table_boundary.stl"),
+                position=[0, 0, 0],
+                is_concave=True,
+                color_rgba=high_border_colour,
+                pybullet_client_id=self._pybullet_client_id,
+            )
+        else:
+            collision_objects.import_mesh(
+                mesh_path("BL-M_Table_ASM_big.stl"),
+                position=[0, 0, 0],
+                is_concave=True,
+                color_rgba=table_colour,
+                pybullet_client_id=self._pybullet_client_id,
+            )
+
+    def close(self):
+        self._disconnect_from_pybullet()
+        if self.xvfb:
+            self.xvfb.close()
+        super().close()
 
 
 class RealRobotCubeEnv(gym.GoalEnv):
@@ -879,3 +973,20 @@ class RealRobotCubeEnv(gym.GoalEnv):
             'orientation': obs['achieved_goal']['orientation'].tolist(),
         }))
         self.reach_start_point = timeidx
+
+
+def get_theta_z_wf(goal_rot, actual_rot):
+    y_axis = [0, 1, 0]
+
+    actual_direction_vector = actual_rot.apply(y_axis)
+
+    goal_direction_vector = goal_rot.apply(y_axis)
+    N = np.array([0, 0, 1]) # normal vector of ground plane
+    proj = goal_direction_vector - goal_direction_vector.dot(N) * N
+    goal_direction_vector = proj / np.linalg.norm(proj) # normalize projection
+
+    orientation_error = np.arccos(
+	goal_direction_vector.dot(actual_direction_vector)
+    )
+
+    return orientation_error
