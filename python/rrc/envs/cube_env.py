@@ -18,6 +18,7 @@ import pybullet_data
 import trifinger_simulation
 from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
+from trifinger_simulation.tasks.move_cube import _min_height, _max_height
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
 import pybullet as p
@@ -56,7 +57,8 @@ class ActionType(enum.Enum):
 def training_reward1(previous_observation, observation, info):
     r = competition_reward(previous_observation, observation, info)
     action = observation['observation']['action']
-    reg = .1 * np.linalg.norm(action)
+    ac_reg = .1 * np.linalg.norm(action)
+    vel_reg = .01 * np.linalg.norm(observation['observation']['velocity'])
     return r - reg
 
 
@@ -72,11 +74,16 @@ def training_reward2(previous_observation, observation, info):
 
 def _position_error(observation):
     range_xy_dist = 0.195 * 2
+    range_z_dist = _max_height
+
     xy_dist = np.linalg.norm(
             observation['desired_goal']['position'][:2]
             - observation['achieved_goal']['position'][:2]
         )
-    pos_err = xy_dist / range_xy_dist
+    z_dist = abs(observation['desired_goal']['position'][2]
+                 - observation['achieved_goal']['position'][2])
+
+    pos_err = (xy_dist / range_xy_dist + z_dist / range_z_dist) / 2
     return pos_err
 
 
@@ -101,6 +108,8 @@ class CubeEnv(gym.GoalEnv):
         termination_fn: callable = None,
         initializer: callable = fixed_g_init,
         episode_length: int = move_cube.episode_length,
+        force_factor: float = 0.5,
+        torque_factor: float = 0.25
     ):
         """Initialize.
 
@@ -131,6 +140,8 @@ class CubeEnv(gym.GoalEnv):
         self.info = {"difficulty": goal_difficulty}
         self.difficulty = goal_difficulty
         self.drop_pen = drop_pen
+        self.force_factor = force_factor
+        self.torque_factor = torque_factor
 
         # TODO: The name "frameskip" makes sense for an atari environment but
         # not really for our scenario.  The name is also misleading as
@@ -226,9 +237,8 @@ class CubeEnv(gym.GoalEnv):
               the goal.
         """
         action = np.clip(action, -1, 1)
-        action[:2] *= .2
-        action[3:] *= .2
-        # action *= .2
+        action[:3] *= self.force_factor
+        action[3:] *= self.torque_factor
         if not self.action_space.contains(action):
             raise ValueError(
                 "Given action is not contained in the action space."
@@ -281,7 +291,9 @@ class CubeEnv(gym.GoalEnv):
         # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
         # info['p_obs'] = {k: p_obs[k] for k in []}
         info['obs'] = {k: observation[k] for k in ['desired_goal', 'achieved_goal']}
-        info['obs']['observation'] = {'action': observation['observation']['action']}
+        info['obs']['observation'] = {
+                'action': observation['observation']['action'],
+                'velocity': observation['observation']['velocity']}
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
