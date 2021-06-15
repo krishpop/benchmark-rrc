@@ -12,4 +12,4 @@ mounts=`python3 training_scripts/build_ws.py ${rrc_root} ${image} ${config}`
 echo ${mounts}
 echo `date`
 singularity exec --contain --nv -B ${mounts} ${image} bash -c \
-        ". /setup.bash; . /ws/devel/setup.bash; timeout -s SIGINT -k 0.1h --foreground 3.5h python3 /ws/src/usercode/python/residual_learning/train.py /logdir/singularity_config.yaml"
+        ". /setup.bash; . /ws/devel/setup.bash; timeout -s SIGINT -k 0.1h --foreground 3.5h python3 /ws/src/usercode/rrc/residual_learning/train.py /logdir/singularity_config.yaml"

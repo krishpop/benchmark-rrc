@@ -22,8 +22,8 @@ image_path = args.image
 
 if not os.path.exists(ws_dir):
     os.makedirs(os.path.join(ws_dir, 'src'))
-    shutil.copytree(os.path.join(code_dir, 'python'),
-                    os.path.join(ws_dir, 'src', 'usercode', 'python'),
+    shutil.copytree(os.path.join(code_dir, 'rrc'),
+                    os.path.join(ws_dir, 'src', 'usercode', 'rrc'),
                     ignore=ignore_patterns("log*", "*.sif"),
                     ignore_dangling_symlinks=True)
     shutil.copytree(os.path.join(code_dir, 'scripts'),

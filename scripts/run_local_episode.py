@@ -2,10 +2,10 @@
 """Run a single episode with a controller in simulation."""
 import argparse
 
-from env.make_env import make_env
+from rrc.env.make_env import make_env
 from trifinger_simulation.tasks import move_cube
-from mp.utils import set_seed
-from combined_code import create_state_machine
+from rrc.mp.utils import set_seed
+from rrc.combined_code import create_state_machine
 
 
 def _init_env(goal_pose_dict, difficulty):

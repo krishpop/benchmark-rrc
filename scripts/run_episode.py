@@ -3,9 +3,9 @@
 import argparse
 import json
 
-from env.make_env import make_env
-from mp.utils import set_seed
-from combined_code import create_state_machine
+from rrc.env.make_env import make_env
+from rrc.mp.utils import set_seed
+from rrc.combined_code import create_state_machine
 
 
 def _init_env(goal_pose_json, difficulty):
