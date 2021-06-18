@@ -12,6 +12,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+logged_runs/
 develop-eggs/
 dist/
 downloads/
