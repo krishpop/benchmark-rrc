@@ -6,10 +6,11 @@ easily try out new reward functions.
 
 
 import numpy as np
+
+from trifinger_simulation.tasks.move_cube import _min_height, _max_height
 from scipy import stats
 from trifinger_simulation.tasks import move_cube
 from scipy.spatial.transform import Rotation
-
 
 ###############################
 # Competition Reward Functions
@@ -71,6 +72,47 @@ def training_reward(previous_observation, observation, info):
     return r - 0.1 * reg + 500 * shaping + 300 * slippage
 
 
+def training_reward1(previous_observation, observation, info):
+    r = competition_reward(previous_observation, observation, info)
+    action = observation['observation']['action']
+    ac_reg = .1 * np.linalg.norm(action)
+    vel_reg = .01 * np.linalg.norm(observation['observation']['velocity'])
+    return r - ac_reg - vel_reg
+
+
+def training_reward2(previous_observation, observation, info):
+    import dm_control.utils.rewards as dmr
+    ori_err = _orientation_error(observation)
+    pos_err = _position_error(observation)
+    r = dmr.tolerance(pos_err, bounds=(0, 0.025), margin=0.025)*2
+    if r > 1.2:
+        r += dmr.tolerance(ori_err, bounds=(0, 0.025), margin=0.05)
+    # r = pos_err <= 0.05
+    # r += ori_err <= 0.05
+    action = observation['observation']['action']
+    # ac_reg = .05 * np.linalg.norm(action)
+    # vel_reg = .05 * np.linalg.norm(observation['observation']['velocity'])
+    return r #- ac_reg - vel_reg
+
+
+def training_reward3(previous_observation, observation, info):
+    ori_shaping = (_orientation_error(previous_observation)
+                   - _orientation_error(observation))
+    return training_reward2(previous_observation, observation, info) + 50 * ori_shaping
+
+
+def training_reward4(previous_observation, observation, info):
+    pos_shaping = (_position_error(previous_observation)
+                   - _position_error(observation))
+    return training_reward3(previous_observation, observation, info) + 50 * pos_shaping
+
+
+train1 = training_reward1
+train2 = training_reward2
+train3 = training_reward3
+train4 = training_reward4
+
+
 def gaussian_reward(previous_observation, observation, info):
     r = competition_reward(previous_observation, observation, info)
     return stats.norm.pdf(7 * r)
@@ -123,6 +165,21 @@ def _orientation_error(observation):
     return error_rot.magnitude() / np.pi
 
 
+def _position_error(observation):
+    range_xy_dist = 0.195 * 2
+    range_z_dist = _max_height
+
+    xy_dist = np.linalg.norm(
+            observation['desired_goal']['position'][:2]
+            - observation['achieved_goal']['position'][:2]
+        )
+    z_dist = abs(observation['desired_goal']['position'][2]
+                 - observation['achieved_goal']['position'][2])
+
+    pos_err = (xy_dist / range_xy_dist + z_dist / range_z_dist) / 2
+    return pos_err
+
+
 def match_orientation_reward(previous_observation, observation, info):
     shaping = (_tip_distance_to_cube(previous_observation)
                - _tip_distance_to_cube(observation))
@@ -135,3 +192,4 @@ def match_orientation_reward_shaped(previous_observation, observation, info):
     ori_shaping = (_orientation_error(previous_observation)
                    - _orientation_error(observation))
     return 500 * shaping + 100 * ori_shaping
+

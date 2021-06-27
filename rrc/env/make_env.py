@@ -1,5 +1,6 @@
 from .cube_env import RealRobotCubeEnv, ActionType
 import rrc.env.wrappers as wrappers
+from gym.wrappers import Monitor
 
 
 def get_initializer(name):
@@ -69,5 +70,46 @@ def make_env(cube_goal_pose, goal_difficulty, action_space, frameskip=1,
     if visualization:
         env = wrappers.PyBulletClearGUIWrapper(env)
     if monitor:
-        env = wrappers.RenderWrapper(env)
+        env = Monitor(wrappers.RenderWrapper(env), path, force=True)
     return env
+
+
+def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
+                     reward_fn=None, termination_fn=False, save_mp4=False,
+                     save_dir='', save_freq=10, initializer=None, **env_kwargs):
+    reward_fn = get_reward_fn(reward_fn)
+
+    goal = None
+    if initializer is None:
+        initializer = initializers.centered_init(diff)
+    elif initializer =='center':
+        initializer = initializers.centered_init
+    elif initializer == 'train':
+        initializer = initializers.training_init
+    elif initializer == 'fixed':
+        from trifinger_simulation.tasks.move_cube import Pose
+        import json
+        goal = Pose.from_json(json.load(open('goal.json', 'r'))).to_dict()
+        initializer = initializers.fixed_g_init(diff, goal)
+    else:
+        initializer = get_initializer(initializer)(diff)
+
+    termination_fn = get_termination_fn(termination_fn)
+
+    def env_fn():
+        env = cube_env.CubeEnv(goal, diff,
+                initializer=initializer,
+                episode_length=episode_length,
+                relative_goal=relative_goal,
+                reward_fn=reward_fn,
+                force_factor=1.,
+                torque_factor=.1,
+                termination_fn=termination_fn,
+                **env_kwargs)
+        if save_mp4:
+            env = MonitorPyBullet(env, save_dir, save_freq)
+        env = FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
+        return Monitor(env, info_keywords=('ori_err', 'pos_err'))
+    return env_fn
+
+

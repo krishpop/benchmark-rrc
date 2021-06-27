@@ -13,12 +13,14 @@ def _init_env(goal_pose_dict, difficulty):
         'action_space': 'torque_and_position',
         'frameskip': 3,
         'reward_fn': 'competition_reward',
-        'termination_fn': 'no_termination',
+        'termination_fn': 'stay_close_to_goal',
         'initializer': 'random_init',
-        'monitor': False,
+        'monitor': True,
         'visualization': True,
         'sim': True,
-        'rank': 0
+        'rank': 0,
+        'episode_length': 1250,
+        'path': '/logdir/'
     }
 
     set_seed(0)
@@ -52,9 +54,12 @@ def main():
     state_machine.reset()
 
     done = False
+    rs = []
     while not done:
         action = state_machine(obs)
-        obs, _, done, _ = env.step(action)
+        obs, r, done, _ = env.step(action)
+        rs.append(r)
+    np.savez('/logdir/rewards.npz', rews=np.array(rs))
 
 
 if __name__ == "__main__":

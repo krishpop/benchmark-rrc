@@ -18,18 +18,16 @@ import pybullet_data
 import trifinger_simulation
 from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
-from trifinger_simulation.tasks.move_cube import _min_height, _max_height
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
 import pybullet as p
 import os.path as osp
 import inspect
-import dm_control.utils.rewards as dmr
 from scipy.spatial.transform import Rotation
 from xvfbwrapper import Xvfb
 import time
 
-from .reward_fns import competition_reward, _orientation_error, gaussian_reward
+from .reward_fns import training_reward1, training_reward2, training_reward3, training_reward, competition_reward, _orientation_error, _position_error
 from .pinocchio_utils import PinocchioUtils
 from .initializers import random_init, training_init, centered_init, fixed_g_init
 from .viz import Viz, CuboidMarker, CubeMarker
@@ -54,39 +52,6 @@ class ActionType(enum.Enum):
     TORQUE_AND_POSITION = enum.auto()
 
 
-def training_reward1(previous_observation, observation, info):
-    r = competition_reward(previous_observation, observation, info)
-    action = observation['observation']['action']
-    ac_reg = .1 * np.linalg.norm(action)
-    vel_reg = .01 * np.linalg.norm(observation['observation']['velocity'])
-    return r - reg
-
-
-def training_reward2(previous_observation, observation, info):
-    pos_err = _orientation_error(observation)
-    ori_err = _position_error(observation)
-    r = dmr.tolerance(pos_err, bounds=(0, 0.05), margin=0.05)
-    r += dmr.tolerance(ori_err, bounds=(0, 0.05), margin=0.05)
-    # r = pos_err <= 0.05
-    # r += ori_err <= 0.05
-    return r
-
-
-def _position_error(observation):
-    range_xy_dist = 0.195 * 2
-    range_z_dist = _max_height
-
-    xy_dist = np.linalg.norm(
-            observation['desired_goal']['position'][:2]
-            - observation['achieved_goal']['position'][:2]
-        )
-    z_dist = abs(observation['desired_goal']['position'][2]
-                 - observation['achieved_goal']['position'][2])
-
-    pos_err = (xy_dist / range_xy_dist + z_dist / range_z_dist) / 2
-    return pos_err
-
-
 def termination_fn(observation):
     low, high = trifingerpro_limits.object_position.low, trifingerpro_limits.object_position.high,
     curr_pos = observation['achieved_goal']['position']
@@ -109,7 +74,8 @@ class CubeEnv(gym.GoalEnv):
         initializer: callable = fixed_g_init,
         episode_length: int = move_cube.episode_length,
         force_factor: float = 0.5,
-        torque_factor: float = 0.25
+        torque_factor: float = 0.25,
+        clip_action: bool = True
     ):
         """Initialize.
 
@@ -142,6 +108,7 @@ class CubeEnv(gym.GoalEnv):
         self.drop_pen = drop_pen
         self.force_factor = force_factor
         self.torque_factor = torque_factor
+        self.clip_action = clip_action
 
         # TODO: The name "frameskip" makes sense for an atari environment but
         # not really for our scenario.  The name is also misleading as
@@ -198,17 +165,19 @@ class CubeEnv(gym.GoalEnv):
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         if not isinstance(info, dict):
+            p_obs = [d['p_obs'] for d in info]
             obs = [d['obs'] for d in info]
-            for i, d in enumerate(obs):
+            for i, (p_d, d) in enumerate(zip(p_obs, obs)):
                 virtual_goal = desired_goal[i]
                 if not isinstance(desired_goal, dict):
                     virtual_goal = {'position': virtual_goal[4:],
                                     'orientation': virtual_goal[:4]}
                 d['desired_goal'] = virtual_goal
-            return np.array([self._compute_reward({}, o, i)
-                             for o, i in zip(obs, info)])
+                p_d['desired_goal'] = virtual_goal
+            return np.array([self._compute_reward(p, o, i)
+                             for p, o, i in zip(p_obs, obs, info)])
         else:
-            p_obs, obs = {}, info['obs']
+            p_obs, obs = info['p_obs'], info['obs']
             if not isinstance(desired_goal, dict):
                 desired_goal = {'position': desired_goal[4:] ,'orientation': desired_goal[:4]}
             obs['desired_goal'] = desired_goal
@@ -236,7 +205,8 @@ class CubeEnv(gym.GoalEnv):
             - info (dict): info dictionary containing the difficulty level of
               the goal.
         """
-        action = np.clip(action, -1, 1)
+        if self.clip_action:
+            action = np.clip(action, -1, 1)
         action[:3] *= self.force_factor
         action[3:] *= self.torque_factor
         if not self.action_space.contains(action):
@@ -281,19 +251,20 @@ class CubeEnv(gym.GoalEnv):
             if self.step_count >= self.episode_length - 1:
                 break
 
+        info = self.info.copy()
         is_done = self.step_count >= self.episode_length + 1
+        if termination_fn(observation):
+            is_done = True
         if self._termination_fn is not None:
             is_done = is_done or self._termination_fn(observation)
+            info['is_success'] = self._termination_fn(observation)
+            reward += 500 * self._termination_fn(observation)
 
-        info = self.info.copy()
         info['ori_err'] = _orientation_error(observation)
         info['pos_err'] = _position_error(observation)
         # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
-        # info['p_obs'] = {k: p_obs[k] for k in []}
-        info['obs'] = {k: observation[k] for k in ['desired_goal', 'achieved_goal']}
-        info['obs']['observation'] = {
-                'action': observation['observation']['action'],
-                'velocity': observation['observation']['velocity']}
+        info['p_obs'] = {k: p_obs[k] for k in ['desired_goal', 'achieved_goal']}
+        info['obs'] = {k: observation[k] for k in ['desired_goal', 'achieved_goal', 'observation']}
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
@@ -303,6 +274,10 @@ class CubeEnv(gym.GoalEnv):
                 observation['desired_goal']['orientation']
             )
             time.sleep(0.01)
+            p.addUserDebugText("R:{:3.2f}, Pos:{:3.2f}, Ori:{:3.2f}".format(
+                reward, info['pos_err'], info['ori_err']),
+                [-0.5, -0.2, 0.05], textColorRGB=[0,0,0], lifeTime=0.14, textSize=1.5,
+                physicsClientId=self._pybullet_client_id)
 
         if is_done:
             self._disconnect_from_pybullet()
@@ -497,8 +472,6 @@ class CubeEnv(gym.GoalEnv):
 
     def close(self):
         self._disconnect_from_pybullet()
-        if self.xvfb:
-            self.xvfb.close()
         super().close()
 
 
@@ -793,6 +766,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             visualization=self.visualization,
             initial_object_pose=initial_object_pose,
         )
+        self._pybullet_client_id = self.platform.simfinger._pybullet_client_id
         # use mass of real cube
         p.changeDynamics(bodyUniqueId=self.platform.cube.block, linkIndex=-1,
                          physicsClientId=self.platform.simfinger._pybullet_client_id,

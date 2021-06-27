@@ -4,10 +4,16 @@ import numpy as np
 import gym
 import time
 import cv2
+import os
+import os.path as osp
 from rrc.env.cube_env import ActionType
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation import camera
 
+try:
+    from xvfbwrapper import Xvfb
+except ImportError:
+    Xvfb = None
 
 EXCEP_MSSG = "================= captured exception =================\n" + \
     "{message}\n" + "{error}\n" + '=================================='
@@ -73,7 +79,7 @@ class action_type_to:
     def _get_action_space(self, action_type):
         import gym
         from trifinger_simulation import TriFingerPlatform
-        from env.cube_env import ActionType
+        from rrc.env.cube_env import ActionType
         spaces = TriFingerPlatform.spaces
         if action_type == ActionType.TORQUE:
             action_space = spaces.robot_torque.gym
@@ -284,3 +290,116 @@ class PyBulletClearGUIWrapper(gym.Wrapper):
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
         return obs
+
+
+class MonitorPyBulletWrapper(gym.Wrapper):
+    def __init__(self, env, save_dir, save_freq=1):
+        super(MonitorPyBulletWrapper, self).__init__(env)
+        assert Xvfb is not None, "xvfbwrapper not installed, make sure `pip install xvfbwrapper` is called"
+        assert env.unwrapped.visualization, "passed MonitorPyBullet env with visualization=False"
+        self.save_dir = save_dir
+        self.save_freq = save_freq
+        self.xvfb = None
+        self.mp4_logging = False
+        self.videos = []
+        self.episode_count = 0
+        if save_dir is not None and not osp.exists(save_dir):
+            os.makedirs(save_dir)
+
+    def reset(self):
+        self.mp4_logging = False
+        self.stop_recording()
+        self.episode_count += 1
+        if self.xvfb is None:
+            env_display = os.environ.get('DISPLAY', '')
+            if not env_display or 'localhost' in env_display:
+                self.xvfb = Xvfb()
+                self.xvfb.start()
+        obs = self.env.reset()
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+        if (self.episode_count - 1) % self.save_freq == 0:
+            filepath = self.create_filepath()
+            p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, filepath,
+                                physicsClientId=self.env.unwrapped._pybullet_client_id)
+        p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
+        return obs
+
+    def step(self, action):
+        obs, r, d, i = super(MonitorPyBulletWrapper, self).step(action)
+        if d:
+            self.stop_recording()
+        return obs, r, d, i
+
+    def stop_recording(self):
+        if self.env.unwrapped._pybullet_client_id:
+            print("Stopping recording {}".format(self.videos[-1]))
+            if (self.episode_count - 1) % self.save_freq == 0:
+                p.stopStateLogging(p.STATE_LOGGING_VIDEO_MP4,
+                        physicsClientId=self.env.unwrapped._pybullet_client_id)
+            self.env.unwrapped._disconnect_from_pybullet()
+
+    def close(self):
+        if self.xvfb:
+            self.xvfb.stop()
+        super().close()
+
+    def create_filepath(self):
+        # MP4 logging
+        filepath = lambda i: osp.join(self.save_dir, f"sim-{i}.mp4")
+        for i in range(25):
+            if not osp.exists(filepath(i)):
+              break
+        filepath = filepath(i)
+        self.videos.append(filepath)
+        return filepath
+
+
+class ResidualPDWrapper(gym.Wrapper):
+    def __init__(self, env, Kp=np.eye(3)*np.array([100,100,1]), Kd=1, include_ac=False,
+                 force_factor=.1, torque_factor=.25):
+        super(ResidualPDWrapper, self).__init__(env)
+        self.Kp = Kp
+        self.Kd = Kd
+        self._obs = self._prev_obs = None
+        self.include_ac = include_ac
+        self.force_factor = force_factor
+        self.torque_factor = torque_factor
+        if self.include_ac:
+            obs_dict = self.env.observation_space.spaces
+            obs_dict = {k: obs_dict['observation'][k] for k in obs_dict['observation']}
+            obs_dict['pd_action'] = gym.spaces.Box(low=-np.ones(3), high=np.ones(3))
+            self.observation_space.spaces['observation'] = obs_dict
+
+    def reset(self):
+        obs = super(ResidualPDWrapper, self).reset()
+        self._prev_obs = None
+        self._obs = obs
+        if self.include_ac:
+            obs['observation']['pd_action'] = self.pd_action(self._obs, self._prev_obs)
+        return obs
+
+    def step(self, action):
+        action[:3] *= self.force_factor
+        action[3:] *= self.torque_factor
+        pd_action = self.pd_action(self._obs, self._prev_obs)
+        ac = action + pd_action
+        self._prev_obs = self._obs
+        obs, r, d, i = self.env.step(ac)
+        self._obs = obs
+        if self.include_ac:
+            obs['observation']['pd_action'] = self.pd_action(self._obs, self._prev_obs)
+        return obs, r, d, i
+
+    def pd_action(self, observation, prev_observation):
+        if observation is None:
+            return np.zeros(6)
+        if observation['observation'].get('pd_action') is not None:
+            return observation['observation']['pd_action']
+        err = observation['observation']['position']
+        u = -self.Kp @ err
+        if prev_observation is None:
+            return np.concatenate([u, np.zeros(3)], axis=-1)
+        err_diff = observation['observation']['position'] - prev_observation['observation']['position']
+        u -= self.Kd * err_diff / self.env.time_step_s
+        return np.concatenate([u, np.zeros(3)], axis=-1)
+
