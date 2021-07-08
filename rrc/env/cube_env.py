@@ -16,6 +16,7 @@ except:
 
 import pybullet_data
 import trifinger_simulation
+from pybullet_utils import bullet_client
 from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
@@ -123,6 +124,7 @@ class CubeEnv(gym.GoalEnv):
         self.episode_length = episode_length
         self.goal_list = [] # needed for multiple goal environments
         self.cube = None
+        self.goal_marker = None
         self.time_step_s = 0.004
         if self.visualization:
             self.cube_viz = Viz()
@@ -145,7 +147,7 @@ class CubeEnv(gym.GoalEnv):
 
         self.action_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
         self.initial_action = np.zeros(6)
-        self._pybullet_client_id = None
+        self._pybullet_client_id = -1
         self.observation_space = gym.spaces.Dict(
             {
                 "observation": gym.spaces.Dict(
@@ -227,9 +229,9 @@ class CubeEnv(gym.GoalEnv):
         for _ in range(num_steps):
             # send action to robot
             p.applyExternalForce(self.cube.block, -1,
-                    action[:3], [0,0,0], p.LINK_FRAME)
+                    action[:3], [0,0,0], p.LINK_FRAME, physicsClientId=self._pybullet_client_id)
             p.applyExternalTorque(self.cube.block, -1,
-                    action[3:], p.LINK_FRAME)
+                    action[3:], p.LINK_FRAME, physicsClientId=self._pybullet_client_id)
 
             p.stepSimulation(
                 physicsClientId=self._pybullet_client_id,
@@ -279,9 +281,6 @@ class CubeEnv(gym.GoalEnv):
                 [-0.5, -0.2, 0.05], textColorRGB=[0,0,0], lifeTime=0.14, textSize=1.5,
                 physicsClientId=self._pybullet_client_id)
 
-        if is_done:
-            self._disconnect_from_pybullet()
-
         return observation, reward, is_done, info
 
     def reset(self):
@@ -300,8 +299,7 @@ class CubeEnv(gym.GoalEnv):
         self.prev_observation, _, _, _ = self.step(self.initial_action)
         return self.prev_observation
 
-    @staticmethod
-    def __connect_to_pybullet(enable_visualization):
+    def __connect_to_pybullet(self, enable_visualization):
         """
         Connect to the Pybullet client via either GUI (visual rendering
         enabled) or DIRECT (no visual rendering) physics servers.
@@ -309,36 +307,37 @@ class CubeEnv(gym.GoalEnv):
         In GUI connection mode, use ctrl or alt with mouse scroll to adjust
         the view of the camera.
         """
-        if enable_visualization:
-            pybullet_client_id = p.connect(p.GUI)
-        else:
-            pybullet_client_id = p.connect(p.DIRECT)
-        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-        return pybullet_client_id
+        if self._pybullet_client_id < 0:
+            if enable_visualization:
+                self._p = bullet_client.BulletClient(connection_mode=p.GUI)
+            else:
+                self._p = bullet_client.BulletClient()
+            self._p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+        return self._p._client
 
     def __setup_pybullet_simulation(self):
         """
         Set the physical parameters of the world in which the simulation
         will run, and import the models to be simulated
         """
-        p.setAdditionalSearchPath(
+        self._p.setAdditionalSearchPath(
             pybullet_data.getDataPath(),
-            physicsClientId=self._pybullet_client_id,
+            # physicsClientId=self._pybullet_client_id,
         )
-        p.setGravity(
+        self._p.setGravity(
             0,
             0,
             -9.81,
-            physicsClientId=self._pybullet_client_id,
+            # physicsClientId=self._pybullet_client_id,
         )
-        p.setTimeStep(
-            self.time_step_s, physicsClientId=self._pybullet_client_id
+        self._p.setTimeStep(
+            self.time_step_s, # physicsClientId=self._pybullet_client_id
         )
 
-        p.loadURDF(
+        self._p.loadURDF(
             "plane_transparent.urdf",
             [0, 0, 0],
-            physicsClientId=self._pybullet_client_id,
+            # physicsClientId=self._pybullet_client_id,
         )
         self.__load_stage()
 
@@ -361,8 +360,13 @@ class CubeEnv(gym.GoalEnv):
 
         # reset simulation
         del self.cube
+ 
+        if self.visualization:
+            del self.goal_marker
 
-        self._disconnect_from_pybullet()
+        # self._disconnect_from_pybullet()
+        if self._pybullet_client_id >= 0:
+            self._p.resetSimulation()
 
         self._pybullet_client_id = self.__connect_to_pybullet(
             enable_visualization=self.visualization
@@ -392,8 +396,8 @@ class CubeEnv(gym.GoalEnv):
         )
 
        # use mass of real cube
-        p.changeDynamics(bodyUniqueId=self.cube.block, linkIndex=-1,
-                         physicsClientId=self._pybullet_client_id,
+        self._p.changeDynamics(bodyUniqueId=self.cube.block, linkIndex=-1,
+                         # physicsClientId=self._pybullet_client_id,
                          mass=CUBE_MASS)
         # p.setTimeStep(0.001)
         # visualize the goal
