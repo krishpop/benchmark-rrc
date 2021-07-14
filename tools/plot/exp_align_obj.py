@@ -11,7 +11,7 @@ from shutil import copyfile
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from .utils import *
+from utils import *
 
 
 MAX_ALIGN_STEPS = 75000 - 1  # This depends on the evaluation code used to generate the logs

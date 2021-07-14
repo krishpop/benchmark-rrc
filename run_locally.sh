@@ -30,4 +30,4 @@ cp -r ${rrc_root}/scripts ${expdir}/catkin_ws/src/usercode
 singularity exec --cleanenv --contain -B ${expdir}/catkin_ws:/ws ${rrc_image} bash -c ". /setup.bash; cd /ws; catbuild"
 
 # run command
-singularity exec --cleanenv --contain --nv -B ${expdir}/catkin_ws:/ws,${expdir}/logs:/logdir,/run,/dev ${rrc_image} bash -c ". /setup.bash; . /ws/devel/setup.bash; ${*:2}"
+singularity exec --cleanenv --contain --nv -B ${expdir}/catkin_ws:/ws,${expdir}/logs:/logdir,/run,/dev ${rrc_image} bash -c ". /setup.bash; . /ws/devel/setup.bash; WANDB_API_KEY=b8005f0286f7d2ba3daa50b832d1c6d160ce4642; ${*:2}"

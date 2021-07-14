@@ -7,11 +7,13 @@ import torch.nn as nn
 import wandb
 import pybullet as p
 
+from typing import Dict, Any
 from copy import deepcopy
 from collections import deque
-from gym import ObservationWrapper
+from gym import ObservationWrapper, Wrapper
 from gym.spaces import flatten_space
 from gym.wrappers import FilterObservation
+from gym.wrappers import Monitor as GymMonitor
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3 import HerReplayBuffer, SAC, TD3
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -21,10 +23,12 @@ from stable_baselines3.common.utils import safe_mean
 from stable_baselines3.common.torch_layers import CombinedExtractor
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.logger import configure
-from rrc.env import cube_env, initializers
-from rrc.env.cube_env import training_reward1, training_reward2, training_reward3
-from rrc.env.wrappers import MonitorPyBulletWrapper
-from rrc.env.reward_fns import competition_reward, _orientation_error, gaussian_reward
+from rrc.env import cube_env, make_env, initializers
+from rrc.env.wrappers import PyBulletClearGUIWrapper, ResidualPDWrapper
+from rrc.env.termination_fns import stay_close_to_goal, stay_close_to_goal_level_4
+from rrc.env.reward_fns import *
+
+from xvfbwrapper import Xvfb
 
 
 class WandbEvalCallback(EvalCallback):
@@ -34,8 +38,48 @@ class WandbEvalCallback(EvalCallback):
         ret = super(WandbEvalCallback, self)._on_step()
         vids = [v for v in self.eval_env.envs[0].videos if v not in vids]
         for v in vids:
-            wandb.log({'EvalRollout': wandb.Video(v)})
+            if osp.exists(v):
+                wandb.log({'EvalRollout': wandb.Video(v)})
         return ret
+
+
+class LogEpInfoEvalCallback(EvalCallback):
+
+    def __init__(self, **eval_callback_kwargs):
+        super(LogEpInfoEvalCallback, self).__init__(**eval_callback_kwargs)
+        self._ep_info_buffer = []
+
+    def _log_success_callback(self, locals_: Dict[str, Any], globals_: Dict[str, Any]) -> None:
+        """
+        Callback passed to the  ``evaluate_policy`` function
+        in order to log the success rate (when applicable),
+        for instance when using HER.
+
+        :param locals_:
+        :param globals_:
+        """
+        super(LogEpInfoEvalCallback, self)._log_success_callback(locals_, globals_)
+        info = locals_["info"]
+        info = {info[k] for k in info if k not in ['r', 'l', 't']}
+        if info:
+            self._ep_info_buffer.append(info)
+
+    def _on_step(self) -> bool:
+        eval_step = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
+        if eval_step:
+            self._ep_info_buffer = []
+
+        super(LogEpInfoEvalCallback, self)._on_step()
+
+        if eval_step and len(self._ep_info_buffer) > 0:
+            for k in self._ep_info_buffer[-1].keys():
+                collected_k = [i[k] for i in self._ep_info_buffer]
+                mean_k, std_k = np.mean(collected_k), np.std(collected_k)
+                if self.verbose > 0:
+                    print(f"Episode {k}: {mean_k:.2f} +/- {std_k:.2f}")
+                # Add to current Logger
+                self.logger.record(f"eval/mean_{k}", float(mean_reward))
+        return True
 
 
 class LogEpInfoCallback(BaseCallback):
@@ -65,6 +109,47 @@ class LogEpInfoCallback(BaseCallback):
         return True
 
 
+class MonitorPyBullet(PyBulletClearGUIWrapper):
+    def __init__(self, env, save_dir, save_freq=1):
+        super(MonitorPyBullet, self).__init__(env)
+        self.save_dir = save_dir
+        self.save_freq = save_freq
+        self.xvfb = None
+        self.mp4_logging = False
+        self.videos = []
+        self.episode_count = 0
+        if save_dir is not None and not osp.exists(save_dir):
+            os.makedirs(save_dir)
+
+    def reset(self):
+        self.mp4_logging = False
+        self.episode_count += 1
+        if self.xvfb is None:
+            env_display = os.environ.get('DISPLAY', '')
+            if not env_display or 'localhost' in env_display:
+                self.xvfb = Xvfb()
+                self.xvfb.start()
+        return super(MonitorPyBullet, self).reset()
+
+    def step(self, action):
+        if not self.mp4_logging and self.episode_count % self.save_freq == 0:
+            self.start_mp4_logging()
+            self.mp4_logging = True
+        return super(MonitorPyBullet, self).step(action)
+
+    def start_mp4_logging(self):
+        # MP4 logging
+        filepath = lambda i: osp.join(self.save_dir, f"sim-{i}.mp4")
+        for i in range(25):
+            if not osp.exists(filepath(i)):
+              break
+        filepath = filepath(i)
+        p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, filepath,
+                            physicsClientId=self.env.unwrapped._pybullet_client_id)
+        self.videos.append(filepath)
+        return
+
+
 class FlattenGoalObs(ObservationWrapper):
     def __init__(self, env, observation_keys):
         super().__init__(env)
@@ -84,10 +169,6 @@ class FlattenGoalObs(ObservationWrapper):
 
 
 class HERCombinedExtractor(CombinedExtractor):
-    """
-    HERCombinedExtractor is a combined extractor which only extracts pre-specified observation_keys to include in
-    the observation, while retaining them at the environment level so that they may still be stored in the replay buffer
-    """
 
     def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, observation_keys: list = []):
         # TODO we do not know features-dim here before going over all the items, so put something there. This is dirty!
@@ -98,9 +179,13 @@ class HERCombinedExtractor(CombinedExtractor):
         total_concat_size = 0
         for key in observation_keys:
             subspace = observation_space.spaces[key]
-            # The observation key is a vector, flatten it if needed
-            extractors[key] = nn.Flatten()
-            total_concat_size += get_flattened_obs_dim(subspace)
+            if is_image_space(subspace):
+                extractors[key] = NatureCNN(subspace, features_dim=cnn_output_dim)
+                total_concat_size += cnn_output_dim
+            else:
+                # The observation key is a vector, flatten it if needed
+                extractors[key] = nn.Flatten()
+                total_concat_size += get_flattened_obs_dim(subspace)
 
         self.extractors = nn.ModuleDict(extractors)
 
@@ -108,42 +193,12 @@ class HERCombinedExtractor(CombinedExtractor):
         self._features_dim = total_concat_size
 
 
-def env_fn_generator(diff=3, initializer=initializers.training_init,
-                     episode_length=500, relative_goal=True, reward_fn=None,
-                     save_mp4=False, save_dir='', save_freq=10, **env_kwargs):
-    if reward_fn is None:
-        reward_fn = training_reward3
-    else:
-        if reward_fn == 'train1':
-            reward_fn = training_reward1
-        elif reward_fn == 'train2':
-            reward_fn = training_reward2
-        elif reward_fn == 'train3':
-            reward_fn = training_reward3
-        elif reward_fn == 'competition':
-            reward_fn = competition_reward
-
-    def env_fn():
-        env = cube_env.CubeEnv(None, diff,
-                initializer=initializer,
-                episode_length=episode_length,
-                relative_goal=relative_goal,
-                reward_fn=reward_fn,
-                torque_factor=.1,
-                **env_kwargs)
-        if save_mp4:
-            env = MonitorPyBullet(env, save_dir, save_freq)
-        env = FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
-        return Monitor(env, info_keywords=('ori_err', 'pos_err'))
-    return env_fn
-
-
-def make_exp_dir(method='SAC', env_str='rrc', *args):
+def make_exp_dir(method='SAC', env_str='sparse_push'):
     exp_root = './data'
     hms_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-    env_str = env_str + '-'.join(list(args))
     exp_name = 'HER-{}_{}'.format(method, env_str)
     exp_dir = osp.join(exp_root, exp_name, hms_time)
+    os.makedirs(exp_dir)
     return exp_dir
 
 
@@ -161,7 +216,7 @@ def train_save_model(model, eval_env, exp_dir, n_steps=1e5, reset_num_timesteps=
         callback = None if len(callbacks) == 0 else callbacks[0]
 
     model.learn(n_steps, eval_env=eval_env, n_eval_episodes=5,
-                eval_freq=10000, reset_num_timesteps=False,
+                eval_freq=10000, reset_num_timesteps=reset_num_timesteps,
                 eval_log_path=exp_dir, callback=callback)
     # Save the trained agent
     model.save(osp.join(exp_dir, '{:.0e}-steps'.format(model.num_timesteps)))
@@ -169,63 +224,82 @@ def train_save_model(model, eval_env, exp_dir, n_steps=1e5, reset_num_timesteps=
 
 
 def make_model(ep_len, lr, exp_dir=None, env=None, use_goal=True,
-               use_sde=False):
+               use_sde=False, log_std_init=-3, load_path=None,
+               residual=False):
     if use_goal:
-        obs_keys = ['desired_goal', 'observation']
+        obs_keys = ['desired_goal', 'achieved_goal', 'observation']
     else:
         obs_keys = ['observation']
 
     policy_kwargs = dict(
-                    log_std_init=-3,
+                    log_std_init=log_std_init,
                     features_extractor_class=HERCombinedExtractor,
                     features_extractor_kwargs=dict(observation_keys=obs_keys))
     if use_sde:
         sde_kwargs = dict(
                 use_sde=True,
-                use_sde_at_warmup=True,
+                use_sde_at_warmup=False,
                 sde_sample_freq=64)
     else:
         sde_kwargs = {}
 
-    rb_kwargs = dict(
-                    n_sampled_goal=4,
-                    goal_selection_strategy='future',
-                    online_sampling=False,
-                    max_episode_length=ep_len)
+    rb_kwargs = dict(n_sampled_goal=4,
+                     goal_selection_strategy='future',
+                     online_sampling=False,
+                     max_episode_length=ep_len)
 
     model = SAC('MultiInputPolicy', env,
+                # tensorboard_log=exp_dir,
                 replay_buffer_class=HerReplayBuffer,
                 # Parameters for HER
                 replay_buffer_kwargs=rb_kwargs,
                 policy_kwargs=policy_kwargs,
                 verbose=1, buffer_size=int(1e6),
-                learning_starts=1500,
+                learning_starts=20000,
                 learning_rate=lr,
-                gamma=0.99, batch_size=256, **sde_kwargs)
+                gamma=0.99, batch_size=256, residual=residual, **sde_kwargs)
+    if load_path is not None:
+        if osp.isdir(load_path):
+            load_path = osp.join(load_path, 'best_model.zip')
+        model = model.load(load_path, env)
     return model
 
 
 def main(n_steps, diff, ep_len, lr, norm_env={}, dry_run=False,
-         render=False, reward_fn=None, use_goal=True, use_sde=True):
-    exp_dir = make_exp_dir(diff)
+         render=False, reward_fn=None, use_goal=True, use_sde=True,
+         termination_fn=None, run=None, initializer=None, load_path=None,
+         residual=False, contact_env=False):
+    exp_root = './data'
+    hms_time = time.strftime("%Y-%m-%d_%H-%M-%S")
+    exp_name = 'HER-SAC_rrc-diff{}'.format(diff)
+    exp_dir = osp.join(exp_root, exp_name, hms_time)
     os.makedirs(exp_dir)
     if not dry_run:
         wandb.config.update({'exp_dir': exp_dir})
 
-    env_fn = env_fn_generator(diff, episode_length=ep_len, reward_fn=reward_fn)
+    env_cls = cube_env.ContactForceCubeEnv if contact_env else cube_env.CubeEnv
+    env_fn = make_env.env_fn_generator(diff, episode_length=ep_len, reward_fn=reward_fn,
+                              termination_fn=termination_fn, initializer=initializer,
+                              residual=residual, env_cls=env_cls)
     env = DummyVecEnv([env_fn])
     if norm_env:
         env = VecNormalize(env, **norm_env)
 
-    model = make_model(ep_len, lr, exp_dir, env, use_goal)
-    logger = configure(exp_dir, ['stdout', 'wandb'])
+    model = make_model(ep_len, lr, exp_dir, env, use_goal, load_path=load_path,
+                       residual=residual)
+    if load_path:
+        env.reset()
+
+    log_kinds = ['stdout', 'wandb'] if not dry_run else ['stdout']
+    logger = configure(exp_dir, log_kinds)
     model.set_logger(logger)
 
     if render:
         save_dir = osp.join(exp_dir, 'videos')
-        render_env_fn = env_fn_generator(diff, episode_length=ep_len,
+        render_env_fn = make_env.env_fn_generator(diff, episode_length=ep_len,
                 visualization=True, save_mp4=True, save_dir=save_dir,
-                reward_fn='competition')
+                reward_fn='competition', termination_fn=termination_fn,
+                initializer=initializer, residual=residual, env_cls=env_cls)
         render_env = DummyVecEnv([render_env_fn])
         if norm_env:
             render_env = VecNormalize(render_env, norm_obs=norm_env['norm_obs'],
@@ -233,12 +307,13 @@ def main(n_steps, diff, ep_len, lr, norm_env={}, dry_run=False,
     else:
         render_env = render_env_fn = None
 
-    eval_env_fn = env_fn_generator(diff, episode_length=ep_len,
-                                   reward_fn='competition')
+    eval_env_fn = make_env.env_fn_generator(diff, episode_length=ep_len, reward_fn='competition',
+                                   termination_fn=termination_fn, residual=residual,
+                                   env_cls=env_cls)
     eval_env = DummyVecEnv([eval_env_fn])
     if norm_env:
         eval_env = VecNormalize(eval_env, norm_obs=norm_env['norm_obs'],
-                                training=False)
+                                training=False, initializer=initializer)
 
     # Training model, with keyboard interrupting for saving
     callbacks = []
@@ -276,19 +351,27 @@ if __name__ == '__main__':
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--rew_fn', default='train2', type=str)
     parser.add_argument('--no_goal', action='store_true')
-    parser.add_argument('--no_sde', action='store_true')
+    parser.add_argument('--sde', action='store_true')
+    parser.add_argument('--residual', action='store_true')
+    parser.add_argument('--contact', action='store_true')
     parser.add_argument('--name', type=str)
+    parser.add_argument('--term_fn', type=str)
+    parser.add_argument('--init', default='center', type=str)
+    parser.add_argument('--load_path', type=str)
     args = parser.parse_args()
 
     norm_env = {}
     if args.normalize_obs or args.normalize_reward:
         norm_env = dict(norm_obs=args.normalize_obs, norm_reward=args.normalize_reward)
 
+    run = None
     if not args.dry_run:
-        wandb.init(project='cvxrl', name=args.name)# sync_tensorboard=True)
+        run = wandb.init(project='cvxrl', name=args.name)# sync_tensorboard=True)
         del args.name
         wandb.config.update(args)
 
     main(args.n_steps, args.diff, args.ep_len, args.lr, norm_env,
          dry_run=args.dry_run, render=args.render, reward_fn=args.rew_fn,
-         use_goal=not(args.no_goal), use_sde=not(args.no_sde))
+         use_goal=not(args.no_goal), use_sde=args.sde,
+         termination_fn=args.term_fn, run=run, initializer=args.init,
+         load_path=args.load_path, residual=args.residual, contact_env=args.contact)
