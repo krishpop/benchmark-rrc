@@ -112,6 +112,8 @@ class CubeEnv(gym.GoalEnv):
         self.force_factor = force_factor
         self.torque_factor = torque_factor
         self.clip_action = clip_action
+        if gravity is None:
+            gravity = -9.81
         self._gravity = gravity
 
         # TODO: The name "frameskip" makes sense for an atari environment but
@@ -509,8 +511,8 @@ class ContactForceCubeEnv(CubeEnv):
         force_factor: float = 0.5,
         torque_factor: float = 0.25,
         clip_action: bool = True,
+        gravity: Union[float, Callable[[], int]] = -9.81,
         reset_contacts: bool = False
-
     ):
         super(ContactForceCubeEnv, self).__init__(cube_goal_pose,
                 goal_difficulty,
@@ -524,7 +526,8 @@ class ContactForceCubeEnv(CubeEnv):
                 episode_length,
                 force_factor,
                 torque_factor,
-                clip_action)
+                clip_action,
+                gravity)
         self.reset_contacts = reset_contacts
         low = -np.ones(9)
         high = np.ones(9)
