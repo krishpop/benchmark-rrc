@@ -1,5 +1,7 @@
 from .cube_env import RealRobotCubeEnv, ActionType
 import rrc.env.wrappers as wrappers
+from rrc.env import initializers, cube_env
+from trifinger_simulation.tasks.move_cube import Pose
 from gym.wrappers import Monitor
 
 
@@ -74,9 +76,57 @@ def make_env(cube_goal_pose, goal_difficulty, action_space, frameskip=1,
     return env
 
 
+def make_env_cls(diff=3, initializer='train',
+                     episode_length=500, relative_goal=True, reward_fn=None,
+                     termination_fn=False, **env_kwargs):
+    if reward_fn is None:
+        reward_fn = training_reward4
+    else:
+        if reward_fn == 'train1':
+            reward_fn = training_reward1
+        elif reward_fn == 'train2':
+            reward_fn = training_reward2
+        elif reward_fn == 'train3':
+            reward_fn = training_reward3
+        elif reward_fn == 'train4':
+            reward_fn = training_reward4
+        elif reward_fn == 'competition':
+            reward_fn = competition_reward
+    if termination_fn:
+        termination_fn = stay_close_to_goal if diff<4 else stay_close_to_goal_level_4
+    else:
+        termination_fn = None
+
+    if initializer is None:
+        initializer = initializers.centered_init
+    elif initializer =='center':
+        initializer = initializers.centered_init
+    elif initializer == 'train':
+        initializer = initializers.training_init
+    elif initializer == 'fixed':
+        from trifinger_simulation.tasks.move_cube import Pose
+        import json
+        goal = Pose.from_json(json.load(open('goal.json', 'r'))).to_dict()
+        initializer = initializers.fixed_g_init(diff, goal)
+
+    env_cls = functools.partial(cube_env.CubeEnv, cube_goal_pose=None,
+            goal_difficulty=diff,
+            initializer=initializer,
+            episode_length=episode_length,
+            relative_goal=relative_goal,
+            reward_fn=reward_fn,
+            termination_fn=termination_fn,
+            force_factor=1.,
+            torque_factor=1.,
+            **env_kwargs)
+    return env_cls
+
+
 def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
-                     reward_fn=None, termination_fn=False, save_mp4=False,
-                     save_dir='', save_freq=10, initializer=None, **env_kwargs):
+                     reward_fn=None, termination_fn=None, save_mp4=False,
+                     save_dir='', save_freq=1, initializer=None,
+                     residual=False,
+                     env_cls=cube_env.CubeEnv, flatten_goal=True, **env_kwargs):
     reward_fn = get_reward_fn(reward_fn)
 
     goal = None
@@ -94,10 +144,15 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
     else:
         initializer = get_initializer(initializer)(diff)
 
-    termination_fn = get_termination_fn(termination_fn)
+    if termination_fn is not None:
+        termination_fn = get_termination_fn(termination_fn)
 
     def env_fn():
-        env = cube_env.CubeEnv(goal, diff,
+        force_factor, torque_factor = .25, .1
+        if residual:
+            r_force_factor, r_torque_factor = .1, .25
+            force_factor, torque_factor = 1., 1.
+        env = env_cls(goal, diff,
                 initializer=initializer,
                 episode_length=episode_length,
                 relative_goal=relative_goal,
@@ -106,10 +161,15 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
                 torque_factor=.1,
                 termination_fn=termination_fn,
                 **env_kwargs)
+        if residual:
+            env = ResidualPDWrapper(env, force_factor=r_force_factor,
+                                    torque_factor=r_torque_factor)
         if save_mp4:
-            env = MonitorPyBullet(env, save_dir, save_freq)
-        env = FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
-        return Monitor(env, info_keywords=('ori_err', 'pos_err'))
+            env = wrappers.MonitorPyBulletWrapper(env, save_dir, save_freq)
+        elif env_kwargs.get('visualization', False):
+            env = wrappers.PyBulletClearGUIWrapper(env)
+        if flatten_goal:
+            env = wrappers.FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
+        return wrappers.Monitor(env, info_keywords=('ori_err', 'pos_err'))
     return env_fn
-
 

@@ -7,6 +7,9 @@ import cv2
 import os
 import os.path as osp
 from rrc.env.cube_env import ActionType
+from gym import ObservationWrapper
+from gym.spaces import flatten_space
+from stable_baselines3.common.monitor import Monitor
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation import camera
 
@@ -95,7 +98,6 @@ class action_type_to:
         else:
             raise ValueError('unknown action type')
         return action_space
-
 
 
 
@@ -294,21 +296,22 @@ class PyBulletClearGUIWrapper(gym.Wrapper):
 
 class MonitorPyBulletWrapper(gym.Wrapper):
     def __init__(self, env, save_dir, save_freq=1):
+        env = PyBulletClearGUIWrapper(env)
         super(MonitorPyBulletWrapper, self).__init__(env)
         assert Xvfb is not None, "xvfbwrapper not installed, make sure `pip install xvfbwrapper` is called"
         assert env.unwrapped.visualization, "passed MonitorPyBullet env with visualization=False"
         self.save_dir = save_dir
         self.save_freq = save_freq
         self.xvfb = None
-        self.mp4_logging = False
         self.videos = []
         self.episode_count = 0
+        self.recording = False
         if save_dir is not None and not osp.exists(save_dir):
             os.makedirs(save_dir)
 
     def reset(self):
-        self.mp4_logging = False
-        self.stop_recording()
+        if self.recording:
+            self.stop_recording()
         self.episode_count += 1
         if self.xvfb is None:
             env_display = os.environ.get('DISPLAY', '')
@@ -321,22 +324,24 @@ class MonitorPyBulletWrapper(gym.Wrapper):
             filepath = self.create_filepath()
             p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, filepath,
                                 physicsClientId=self.env.unwrapped._pybullet_client_id)
+            self.recording = True
         p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
         return obs
 
     def step(self, action):
         obs, r, d, i = super(MonitorPyBulletWrapper, self).step(action)
-        if d:
+        if d and self.recording:
             self.stop_recording()
         return obs, r, d, i
 
     def stop_recording(self):
-        if self.env.unwrapped._pybullet_client_id:
+        self.recording = False
+        if self.env.unwrapped._pybullet_client_id >= 0 and len(self.videos) > 0:
             print("Stopping recording {}".format(self.videos[-1]))
             if (self.episode_count - 1) % self.save_freq == 0:
                 p.stopStateLogging(p.STATE_LOGGING_VIDEO_MP4,
                         physicsClientId=self.env.unwrapped._pybullet_client_id)
-            self.env.unwrapped._disconnect_from_pybullet()
+            # self.env.unwrapped._disconnect_from_pybullet()
 
     def close(self):
         if self.xvfb:
@@ -402,4 +407,23 @@ class ResidualPDWrapper(gym.Wrapper):
         err_diff = observation['observation']['position'] - prev_observation['observation']['position']
         u -= self.Kd * err_diff / self.env.time_step_s
         return np.concatenate([u, np.zeros(3)], axis=-1)
+
+
+class FlattenGoalObs(ObservationWrapper):
+    def __init__(self, env, observation_keys):
+        super().__init__(env)
+        obs_space = self.env.observation_space
+        obs_dict = {k: flatten_space(obs_space[k]) for k in observation_keys}
+        self.observation_space = gym.spaces.Dict(obs_dict)
+
+    def observation(self, obs):
+        n_obs = {}
+        for k in self.observation_space.spaces:
+            if isinstance(obs[k], dict):
+                obs_list = [obs[k][k2] for k2 in self.env.observation_space[k]]
+                n_obs[k] = np.concatenate(obs_list)
+            else:
+                n_obs[k] = obs[k]
+        return n_obs
+
 

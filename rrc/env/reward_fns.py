@@ -35,6 +35,18 @@ task4_competition_reward = competition_reward
 ##############################
 
 
+def _lgsk_kernel(x, scale: float = 50.0):
+    """Defines logistic kernel function to bound input to [-0.25, 0)
+    Ref: https://arxiv.org/abs/1901.08652 (page 15)
+    Args:
+        x: distance.
+        scale:  kernel function.
+    Returns:
+        Output tensor computed using kernel.
+    """
+    scaled = x * scale
+    return 1.0 / (np.exp(scaled) + 2 + np.exp(-scaled))
+
 def _tip_distance_to_cube(observation):
     # calculate first reward term
     pose = observation['achieved_goal']
@@ -63,6 +75,15 @@ def _tip_slippage(previous_observation, observation):
     return -np.linalg.norm(relative_tip_pos - prev_relative_tip_pos)
 
 
+def _corner_error(observation):
+    goal_pose = move_cube.Pose.from_dict(observation['desired_goal'])
+    actual_pose = move_cube.Pose.from_dict(observation['achieved_goal'])
+    goal_corners = move_cube.get_cube_corner_positions(goal_pose)
+    actual_corners = move_cube.get_cube_corner_positions(actual_pose)
+    orientation_errors = np.linalg.norm(goal_corners - actual_corners, axis=1)
+    return orientation_errors
+
+
 def training_reward(previous_observation, observation, info):
     shaping = (_tip_distance_to_cube(previous_observation)
                - _tip_distance_to_cube(observation))
@@ -84,8 +105,11 @@ def training_reward2(previous_observation, observation, info):
     import dm_control.utils.rewards as dmr
     ori_err = _orientation_error(observation)
     pos_err = _position_error(observation)
-    r = dmr.tolerance(pos_err, bounds=(0, 0.025), margin=0.025)*2
-    if r > 1.2:
+    pos_err_xy, pos_err_z = _xy_position_error(observation), _z_position_error(observation)
+    xy_reward = dmr.tolerance(pos_err_xy, bounds=(0, 0.025), margin=0.075, sigmoid='long_tail')
+    z_reward = dmr.tolerance(pos_err_z, bounds=(0, 0.025), margin=0.075, sigmoid='long_tail')
+    r = xy_reward + z_reward
+    if r > 1.:
         r += dmr.tolerance(ori_err, bounds=(0, 0.025), margin=0.05)
     # r = pos_err <= 0.05
     # r += ori_err <= 0.05
@@ -106,11 +130,16 @@ def training_reward4(previous_observation, observation, info):
                    - _position_error(observation))
     return training_reward3(previous_observation, observation, info) + 50 * pos_shaping
 
+def training_reward5(previous_observation, observation, info):
+    dist = _corner_error(observation)
+    return sum([_lgsk_kernel(d) for d in dist])
 
 train1 = training_reward1
 train2 = training_reward2
 train3 = training_reward3
 train4 = training_reward4
+train5 = training_reward5
+competition = competition_reward
 
 
 def gaussian_reward(previous_observation, observation, info):
@@ -165,20 +194,24 @@ def _orientation_error(observation):
     return error_rot.magnitude() / np.pi
 
 
-def _position_error(observation):
+def _xy_position_error(observation):
     range_xy_dist = 0.195 * 2
-    range_z_dist = _max_height
-
     xy_dist = np.linalg.norm(
             observation['desired_goal']['position'][:2]
             - observation['achieved_goal']['position'][:2]
         )
+    return xy_dist / range_xy_dist
+
+def _z_position_error(observation):
+    range_z_dist = _max_height
+
     z_dist = abs(observation['desired_goal']['position'][2]
                  - observation['achieved_goal']['position'][2])
+    return z_dist / range_z_dist
 
-    pos_err = (xy_dist / range_xy_dist + z_dist / range_z_dist) / 2
+def _position_error(observation):
+    pos_err = (_xy_position_error(observation) + _z_position_error(observation)) / 2
     return pos_err
-
 
 def match_orientation_reward(previous_observation, observation, info):
     shaping = (_tip_distance_to_cube(previous_observation)

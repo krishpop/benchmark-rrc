@@ -21,17 +21,18 @@ from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
+from rrc_iprl_package.control import controller_utils as c_utils
 import pybullet as p
 import os.path as osp
 import inspect
 from scipy.spatial.transform import Rotation
-from xvfbwrapper import Xvfb
 import time
+from typing import Union, Callable
 
 from .reward_fns import training_reward1, training_reward2, training_reward3, training_reward, competition_reward, _orientation_error, _position_error
 from .pinocchio_utils import PinocchioUtils
 from .initializers import random_init, training_init, centered_init, fixed_g_init
-from .viz import Viz, CuboidMarker, CubeMarker
+from .viz import Viz, CuboidMarker, CubeMarker, VisualMarkers
 
 
 class ActionType(enum.Enum):
@@ -76,7 +77,8 @@ class CubeEnv(gym.GoalEnv):
         episode_length: int = move_cube.episode_length,
         force_factor: float = 0.5,
         torque_factor: float = 0.25,
-        clip_action: bool = True
+        clip_action: bool = True,
+        gravity: Union[float, Callable[[], int]] = -9.81
     ):
         """Initialize.
 
@@ -110,6 +112,7 @@ class CubeEnv(gym.GoalEnv):
         self.force_factor = force_factor
         self.torque_factor = torque_factor
         self.clip_action = clip_action
+        self._gravity = gravity
 
         # TODO: The name "frameskip" makes sense for an atari environment but
         # not really for our scenario.  The name is also misleading as
@@ -327,7 +330,7 @@ class CubeEnv(gym.GoalEnv):
         self._p.setGravity(
             0,
             0,
-            -9.81,
+            self.gravity,
             # physicsClientId=self._pybullet_client_id,
         )
         self._p.setTimeStep(
@@ -360,7 +363,7 @@ class CubeEnv(gym.GoalEnv):
 
         # reset simulation
         del self.cube
- 
+
         if self.visualization:
             del self.goal_marker
 
@@ -474,9 +477,191 @@ class CubeEnv(gym.GoalEnv):
                 pybullet_client_id=self._pybullet_client_id,
             )
 
+    @property
+    def gravity(self):
+        if callable(self._gravity):
+            return self._gravity()
+        else:
+            return self._gravity
+
+    @gravity.setter
+    def gravity(self, x: Union[float, Callable[[], float]]):
+        self._gravity = x
+
     def close(self):
         self._disconnect_from_pybullet()
         super().close()
+
+
+class ContactForceCubeEnv(CubeEnv):
+    def __init__(
+        self,
+        cube_goal_pose: dict,
+        goal_difficulty: int,
+        drop_pen: float = -100.,
+        frameskip: int = 1,
+        visualization: bool = False,
+        relative_goal: bool = False,
+        reward_fn: callable = training_reward2,
+        termination_fn: callable = None,
+        initializer: callable = fixed_g_init,
+        episode_length: int = move_cube.episode_length,
+        force_factor: float = 0.5,
+        torque_factor: float = 0.25,
+        clip_action: bool = True,
+        reset_contacts: bool = False
+
+    ):
+        super(ContactForceCubeEnv, self).__init__(cube_goal_pose,
+                goal_difficulty,
+                drop_pen,
+                frameskip,
+                visualization,
+                relative_goal,
+                reward_fn,
+                termination_fn,
+                initializer,
+                episode_length,
+                force_factor,
+                torque_factor,
+                clip_action)
+        self.reset_contacts = reset_contacts
+        low = -np.ones(9)
+        high = np.ones(9)
+        self.action_space = gym.spaces.Box(low=low, high=high)
+        self.initial_action = np.max([np.zeros(9), low], axis=0)
+        self.cp_params = None
+        self.observation_space.spaces['observation'].spaces['action'] = self.action_space
+        self.observation_space.spaces['observation'].spaces['tip_positions'] = gym.spaces.Box(
+                    low=np.concatenate(
+                        [trifingerpro_limits.object_position.low for _ in range(3)]),
+                    high=np.concatenate(
+                        [trifingerpro_limits.object_position.high for _ in range(3)]),
+                )
+
+    def step(self, action):
+        assert self.action_space.contains(action), f'Action: {action} not contained in action space'
+        num_steps = self.frameskip
+
+        # ensure episode length is not exceeded due to frameskip
+        step_count_after = self.step_count + num_steps
+        if step_count_after > self.episode_length + 1:
+            excess = step_count_after - self.episode_length + 1
+            num_steps = max(1, num_steps - excess)
+
+        reward = 0.
+        p_obs = None
+        for i in range(num_steps):
+            obs = self.prev_observation
+            self.apply_action(action, obs)
+            observation = self._create_observation(action)
+
+            if self.prev_observation is None:
+                self.prev_observation = observation
+
+            p_obs = self.prev_observation.copy()
+            self.prev_observation = observation
+            reward += self._compute_reward(
+                self.prev_observation,
+                observation,
+                self.info
+            )
+            self.step_count += 1  # t
+            # make sure to not exceed the episode length
+            if self.step_count >= self.episode_length - 1:
+                break
+
+        info = self.info.copy()
+        is_done = self.step_count >= self.episode_length + 1
+        if termination_fn(observation):
+            is_done = True
+        if self._termination_fn is not None:
+            is_done = is_done or self._termination_fn(observation)
+            info['is_success'] = self._termination_fn(observation)
+            reward += 500 * self._termination_fn(observation)
+
+        info['ori_err'] = _orientation_error(observation)
+        info['pos_err'] = _position_error(observation)
+        # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
+        info['p_obs'] = {k: p_obs[k] for k in ['desired_goal', 'achieved_goal']}
+        info['obs'] = {k: observation[k] for k in ['desired_goal', 'achieved_goal', 'observation']}
+
+        if self.visualization:
+            self.cube_viz.update_cube_orientation(
+                observation['achieved_goal']['position'],
+                observation['achieved_goal']['orientation'],
+                observation['desired_goal']['position'],
+                observation['desired_goal']['orientation']
+            )
+            time.sleep(0.01)
+            p.addUserDebugText("R:{:3.2f}, Pos:{:3.2f}, Ori:{:3.2f}".format(
+                reward, info['pos_err'], info['ori_err']),
+                [-0.5, -0.2, 0.05], textColorRGB=[0,0,0], lifeTime=0.14, textSize=1.5,
+                physicsClientId=self._pybullet_client_id)
+
+        # if is_done:
+            # self._disconnect_from_pybullet()
+
+        return observation, reward, is_done, info
+
+    def apply_action(self, action, observation):
+        if observation is None:
+            observation = self._create_observation(action)
+        cube_pose = move_cube.Pose.from_dict(observation['achieved_goal'])
+        if self.cp_params is None:
+            self.cp_params = c_utils.get_lifting_cp_params(cube_pose)
+            print("Closest ground face: {}".format(
+                c_utils.get_closest_ground_face(cube_pose)))
+
+        action = action.reshape((3,3))
+
+        for i, ac in enumerate(action):
+            cube_ftip_pos_wf = c_utils.get_cp_pos_wf_from_cp_param(
+                    self.cp_params[i], cube_pose.position, cube_pose.orientation)
+            p.applyExternalForce(self.cube.block, -1,
+                forceObj=ac, posObj=cube_ftip_pos_wf,
+                flags=p.LINK_FRAME, physicsClientId=self._pybullet_client_id)
+
+        p.stepSimulation(
+                physicsClientId=self._pybullet_client_id,
+            )
+        return
+
+    def _create_observation(self, action):
+        cube_state = self.cube.get_state()
+        obs_pos = position = np.asarray(cube_state[0])
+        obs_rot = orientation = np.asarray(cube_state[1])
+        velocity = p.getBaseVelocity(
+            self.cube.block,
+            physicsClientId=self.cube._pybullet_client_id,
+        )
+        velocity = np.concatenate([np.array(a) for a in velocity])
+
+        if self.relative_goal:
+            obs_pos = position - self.goal['position']
+            goal_rot = Rotation.from_quat(self.goal['orientation'])
+            actual_rot = Rotation.from_quat(obs_rot)
+            obs_rot = (goal_rot*actual_rot.inv()).as_quat()
+
+        if self.cp_params is None:
+            cube_pose = move_cube.Pose(position=position, orientation=orientation)
+            self.cp_params = c_utils.get_lifting_cp_params(cube_pose)
+        cube_ftip_pos_wf = c_utils.get_cp_pos_wf_from_cp_params(
+                    self.cp_params, position, orientation)
+        cube_ftip_pos_wf = np.concatenate(cube_ftip_pos_wf)
+
+        obs = {'achieved_goal':
+                {'position': position, 'orientation': orientation},
+                'desired_goal': self.goal,
+                'observation': {'position': obs_pos,
+                                'orientation': obs_rot,
+                                'velocity': velocity,
+                                'tip_positions': cube_ftip_pos_wf,
+                                'action': action}
+                }
+        if self.reset_contacts:
+            self.cp_params = None
+        return obs
 
 
 class RealRobotCubeEnv(gym.GoalEnv):
