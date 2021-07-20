@@ -479,6 +479,24 @@ class CubeEnv(gym.GoalEnv):
                 pybullet_client_id=self._pybullet_client_id,
             )
 
+    def seed(self, seed=None):
+        """Sets the seed for this env’s random number generator.
+
+        .. note::
+
+           Spaces need to be seeded separately.  E.g. if you want to sample
+           actions directly from the action space using
+           ``env.action_space.sample()`` you can set a seed there using
+           ``env.action_space.seed()``.
+
+        Returns:
+            List of seeds used by this environment.  This environment only uses
+            a single seed, so the list contains only one element.
+        """
+        self.np_random, seed = gym.utils.seeding.np_random(seed)
+        move_cube.random = self.np_random
+        return [seed]
+
     @property
     def gravity(self):
         if callable(self._gravity):
@@ -512,7 +530,8 @@ class ContactForceCubeEnv(CubeEnv):
         torque_factor: float = 0.25,
         clip_action: bool = True,
         gravity: Union[float, Callable[[], int]] = -9.81,
-        reset_contacts: bool = False
+        reset_contacts: bool = False,
+        tip_wf: bool = True
     ):
         super(ContactForceCubeEnv, self).__init__(cube_goal_pose,
                 goal_difficulty,
@@ -533,7 +552,7 @@ class ContactForceCubeEnv(CubeEnv):
         high = np.ones(9)
         self.action_space = gym.spaces.Box(low=low, high=high)
         self.initial_action = np.max([np.zeros(9), low], axis=0)
-        self.cp_params = None
+        self.cp_params = [np.array([0., 1., 0.]), np.array([1., 0., 0.]), np.array([-1.,  0.,  0.])]
         self.observation_space.spaces['observation'].spaces['action'] = self.action_space
         self.observation_space.spaces['observation'].spaces['tip_positions'] = gym.spaces.Box(
                     low=np.concatenate(
@@ -541,6 +560,8 @@ class ContactForceCubeEnv(CubeEnv):
                     high=np.concatenate(
                         [trifingerpro_limits.object_position.high for _ in range(3)]),
                 )
+        if self.visualization:
+            self.contact_viz = None
 
     def step(self, action):
         assert self.action_space.contains(action), f'Action: {action} not contained in action space'
@@ -651,7 +672,20 @@ class ContactForceCubeEnv(CubeEnv):
             self.cp_params = c_utils.get_lifting_cp_params(cube_pose)
         cube_ftip_pos_wf = c_utils.get_cp_pos_wf_from_cp_params(
                     self.cp_params, position, orientation)
+        if self.visualization:
+            if self.contact_viz is None:
+                self.contact_viz = VisualMarkers()
+                cube_ftip_pos_wf = c_utils.get_cp_pos_wf_from_cp_params(
+                        self.cp_params, position, orientation)
+                self.contact_viz.add(cube_ftip_pos_wf)
+            else:
+                for i, marker in enumerate(self.contact_viz.markers):
+                    pos = cube_ftip_pos_wf[i]
+                    marker.set_state(pos)
         cube_ftip_pos_wf = np.concatenate(cube_ftip_pos_wf)
+        # cube_ftip_pos_of = np.concatenate([
+        #    c_utils.get_cp_of_from_cp_param(cp_param) 
+        #    for cp_param in self.cp_params])
 
         obs = {'achieved_goal':
                 {'position': position, 'orientation': orientation},
@@ -665,6 +699,12 @@ class ContactForceCubeEnv(CubeEnv):
         if self.reset_contacts:
             self.cp_params = None
         return obs
+
+    def reset(self):
+        if self.visualization and self.contact_viz is not None:
+            del self.contact_viz
+            self.contact_viz = None
+        return super(ContactForceCubeEnv, self).reset()
 
 
 class RealRobotCubeEnv(gym.GoalEnv):

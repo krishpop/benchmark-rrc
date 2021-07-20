@@ -201,7 +201,7 @@ class VisualMarkers:
         if color is None:
             color = (0, 1, 1, 0.5)
         for point in points:
-            self.markers.append(SphereMaker(radius, point, color=color))
+            self.markers.append(SphereMarker(radius, point, color=color))
 
     def remove(self):
         self.markers = []
@@ -300,7 +300,7 @@ class CylinderMarker:
         )
 
 
-class SphereMaker:
+class SphereMarker:
     def __init__(self, radius, position, color=(0, 1, 0, 0.5)):
         """
         Create a sphere marker for visualization
