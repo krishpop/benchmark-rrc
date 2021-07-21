@@ -271,7 +271,7 @@ def main(n_steps, diff, ep_len, lr, norm_env={}, dry_run=False,
     wandb.log({'eval/mean_reward':mean_rew})
     print('Want to save Replay Buffer?')
     print('call `model.save_replay_buffer(exp_dir)`')
-    import IPython; IPython.embed()
+    # import IPython; IPython.embed()
     if norm_env:
         stats_path = osp.join(exp_dir, "vec_normalize.pkl")
         print('saving env stats to {}'.format(stats_path))

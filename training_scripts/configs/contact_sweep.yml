@@ -1,7 +1,7 @@
 # command: python train_her.py --diff 3 --lr 7.3e-4 --n_steps 4e5 \  
-# --rew_fn train5 --name wrench-0g-diff3 --seed 1 
+# --rew_fn train5 --name contact-0g-diff3 --contact --seed 1 
 
-name: wrench_diff3_runs
+name: contact_diff3_runs
 program: train_sb3.py
 method: grid
 metric:
@@ -19,3 +19,9 @@ parameters:
     value: 'train5'
   diff:
     value: 3
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  - "--contact"
