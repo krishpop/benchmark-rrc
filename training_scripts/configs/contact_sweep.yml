@@ -4,13 +4,14 @@
 name: contact_diff3_runs
 program: train_sb3.py
 method: grid
+project: cvxrl
 metric:
   name: rollout/ep_rew_mean
-  goal: max
+  goal: maximize
 parameters:
   seed:
     distribution: categorical
-    values: [0, 1, 2, 3, 4]
+    values: [0, 1, 2]
   lr:
     value: 7.3e-4
   n_steps:

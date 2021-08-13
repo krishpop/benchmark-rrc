@@ -287,10 +287,18 @@ class RenderWrapper(gym.Wrapper):
 
 
 class PyBulletClearGUIWrapper(gym.Wrapper):
-    def reset(self, **kwargs):
+    def __init__(self, env, **kwargs):
+        super(PyBulletClearGUIWrapper, self).__init__(env)
+        self.camera_kwargs = kwargs
+
+    def reset(self, camera_kwargs=dict(), **kwargs):
+        cam_kwargs = dict(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, 
+                          cameraTargetPosition=[0,0,0])
+        cam_kwargs.update(self.camera_kwargs)
+        cam_kwargs.update(camera_kwargs)
         obs = self.env.reset(**kwargs)
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-        p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
+        p.resetDebugVisualizerCamera(**cam_kwargs)
         return obs
 
 

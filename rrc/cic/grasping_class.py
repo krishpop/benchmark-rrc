@@ -418,7 +418,6 @@ class ThreeFingerGrasp(BasicGraspingPrimitive):
         # This additional offset should potentially ensure to keep the third finger away,..
         self.excl_add_offset = 0.0
 
-
     def calc_grasp_position(self):
         '''
         This function might be used to calculate all the possible grasp locations if there are multiple to consider
@@ -456,8 +455,6 @@ class ThreeFingerGrasp(BasicGraspingPrimitive):
         '''
         locations, vertical_axes_idx, axes_dir = self.object.compute_edge_loc_entire_cube(cube_state, off_x, off_y, off_z, compute_vertical=True)
         self.asign_arr, self.cent_arr = self.assign_y(locations, robot_state[2][0], robot_state[2][1], robot_state[2][2], direction)
-
-
 
     def get_finger_position(self,robot_state, cube_state, off_x=0.0, off_y =0.0, off_z=0.0, use_z=True):
         # use z variable has no effect here,...

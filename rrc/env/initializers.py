@@ -240,6 +240,31 @@ class FixedGoalInitializer(RandomInitializer):
         return goal
 
 
+class FixedInitializer(RandomInitializer):
+    def __init__(self, difficulty, default_goal=None, default_initial_state=None):
+        if default_goal is None:
+            default_goal = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
+                            'orientation': np.array([0,0,0,1])}
+        self.default_goal = default_goal
+        self.default_initial_state = default_initial_state
+        super().__init__(difficulty)
+
+    def get_initial_state(self):
+        if self.default_initial_state:
+            init = move_cube.Pose.from_dict(self.default_initial_state)
+        else:
+            init = super().get_initial_state()
+        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
+        return init
+
+    def get_goal(self):
+        goal = move_cube.Pose.from_dict(self.default_goal)
+        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        return goal
+
+
+
+
 random_init = RandomInitializer
 eval_init = EvalEpisodesInitializer
 small_rot_init = Task4SmallRotation
@@ -247,3 +272,4 @@ training_init = TrainingInitializer
 centered_init = CenteredInitializer
 bo_init = BOInitializer
 fixed_g_init = FixedGoalInitializer
+fixed_init = FixedInitializer

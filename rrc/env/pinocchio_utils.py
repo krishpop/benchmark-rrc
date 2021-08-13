@@ -1,4 +1,5 @@
 import numpy as np
+import os.path as osp
 
 import pinocchio
 
@@ -13,6 +14,9 @@ class PinocchioUtils:
         Initializes the finger model on which control's to be performed.
         """
         self.urdf_path = '/opt/blmc_ei/src/robot_properties_fingers/urdf/pro/trifingerpro.urdf'
+        if not osp.exists(self.urdf_path):
+            self.urdf_path = '/scr-ssd/ksrini/trifinger_simulation/python/trifinger_simulation/'
+            self.urdf_path += 'robot_properties_fingers/urdf/pro/trifingerpro.urdf'
         self.tip_link_names = [
             "finger_tip_link_0",
             "finger_tip_link_120",

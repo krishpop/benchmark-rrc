@@ -1,8 +1,18 @@
-from .cube_env import RealRobotCubeEnv, ActionType
 import rrc.env.wrappers as wrappers
+import os.path as osp
+from .cube_env import RealRobotCubeEnv, ActionType
 from rrc.env import initializers, cube_env
 from trifinger_simulation.tasks.move_cube import Pose
 from gym.wrappers import Monitor
+
+
+def get_env_cls(name):
+    if name is None:
+        return cube_env.CubeEnv
+    if hasattr(cube_env, name):
+        return getattr(cube_env, name)
+    else:
+        raise ValueError(f"Can't find env_cls: {name}")
 
 
 def get_initializer(name):
@@ -76,22 +86,14 @@ def make_env(cube_goal_pose, goal_difficulty, action_space, frameskip=1,
     return env
 
 
-def make_env_cls(diff=3, initializer='train',
+def make_env_cls(diff=3, initializer='training_init',
                      episode_length=500, relative_goal=True, reward_fn=None,
                      termination_fn=False, **env_kwargs):
     if reward_fn is None:
         reward_fn = training_reward4
     else:
-        if reward_fn == 'train1':
-            reward_fn = training_reward1
-        elif reward_fn == 'train2':
-            reward_fn = training_reward2
-        elif reward_fn == 'train3':
-            reward_fn = training_reward3
-        elif reward_fn == 'train4':
-            reward_fn = training_reward4
-        elif reward_fn == 'competition':
-            reward_fn = competition_reward
+        reward_fn = get_reward_fn(reward_fn)
+
     if termination_fn:
         termination_fn = stay_close_to_goal if diff<4 else stay_close_to_goal_level_4
     else:
@@ -99,15 +101,14 @@ def make_env_cls(diff=3, initializer='train',
 
     if initializer is None:
         initializer = initializers.centered_init
-    elif initializer =='center':
-        initializer = initializers.centered_init
-    elif initializer == 'train':
-        initializer = initializers.training_init
     elif initializer == 'fixed':
         from trifinger_simulation.tasks.move_cube import Pose
         import json
-        goal = Pose.from_json(json.load(open('goal.json', 'r'))).to_dict()
+        goal_fp = osp.join(osp.split(__file__)[0], 'goal.json')
+        goal = Pose.from_json(json.load(open(goal_fp, 'r'))).to_dict()
         initializer = initializers.fixed_g_init(diff, goal)
+    else:
+        initializer = get_initializer(initializer)(diff)
 
     env_cls = functools.partial(cube_env.CubeEnv, cube_goal_pose=None,
             goal_difficulty=diff,
@@ -125,8 +126,8 @@ def make_env_cls(diff=3, initializer='train',
 def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
                      reward_fn=None, termination_fn=None, save_mp4=False,
                      save_dir='', save_freq=1, initializer=None,
-                     residual=False,
-                     env_cls=cube_env.CubeEnv, flatten_goal=True, **env_kwargs):
+                     residual=False, env_cls=None, flatten_goal=True,
+                     **env_kwargs):
     reward_fn = get_reward_fn(reward_fn)
 
     goal = None
@@ -139,13 +140,20 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
     elif initializer == 'fixed':
         from trifinger_simulation.tasks.move_cube import Pose
         import json
-        goal = Pose.from_json(json.load(open('goal.json', 'r'))).to_dict()
+        goal_fp = osp.join(osp.split(__file__)[0], 'goal.json')
+        goal = Pose.from_json(json.load(open(goal_fp, 'r'))).to_dict()
         initializer = initializers.fixed_g_init(diff, goal)
     else:
         initializer = get_initializer(initializer)(diff)
 
     if termination_fn is not None:
         termination_fn = get_termination_fn(termination_fn)
+
+    info_keywords = ('ori_err', 'pos_err'),
+    if env_cls == 'wrench_env':
+        info_keywords = ('ori_err', 'pos_err', 'infeasible')
+        
+    env_cls = get_env_cls(env_cls)
 
     def env_fn():
         force_factor, torque_factor = .25, .1
@@ -170,6 +178,6 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
             env = wrappers.PyBulletClearGUIWrapper(env)
         if flatten_goal:
             env = wrappers.FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
-        return wrappers.Monitor(env, info_keywords=('ori_err', 'pos_err'))
+        return wrappers.Monitor(env, info_keywords=info_keywords)
     return env_fn
 
