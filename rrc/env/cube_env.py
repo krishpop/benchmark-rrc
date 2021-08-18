@@ -33,6 +33,7 @@ from trifinger_simulation import trifingerpro_limits, collision_objects
 from trifinger_simulation.tasks import move_cube
 from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 from rrc.mp.const import CUBE_WIDTH, CUBE_HALF_WIDTH, CUBE_MASS
+from rrc.env.termination_fns import position_close_to_goal, pos_and_rot_close_to_goal
 from rrc_iprl_package.control import controller_utils_cube as c_utils
 from scipy.spatial.transform import Rotation
 from scipy.linalg import block_diag  
@@ -280,7 +281,8 @@ class CubeEnv(gym.GoalEnv):
             is_done = is_done or self._termination_fn(observation)
             info['is_success'] = self._termination_fn(observation)
             reward += 500 * self._termination_fn(observation)
-
+        else:
+            info['is_success'] = pos_and_rot_close_to_goal(observation)
         info['ori_err'] = _orientation_error(observation)
         info['pos_err'] = _position_error(observation)
         # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
@@ -625,6 +627,8 @@ class ContactForceCubeEnv(CubeEnv):
             is_done = is_done or self._termination_fn(observation)
             info['is_success'] = self._termination_fn(observation)
             reward += term_bonus * self._termination_fn(observation)
+        else:
+            info['is_success'] = pos_and_rot_close_to_goal(observation) 
 
         info['ori_err'] = _orientation_error(observation)
         info['pos_err'] = _position_error(observation)
@@ -654,7 +658,8 @@ class ContactForceCubeEnv(CubeEnv):
         if observation is None:
             observation = self._create_observation(action)
         cube_pose = move_cube.Pose.from_dict(observation['achieved_goal'])
-        if self.cp_params is None:
+
+        if self.cp_params is None or self.reset_contacts:
             self.cp_params = c_utils.get_lifting_cp_params(cube_pose)
             gymlogger.debug("Closest ground face: {}".format(
                 c_utils.get_closest_ground_face(cube_pose)))
@@ -786,9 +791,10 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         gravity: Union[float, Callable[[], int]] = -9.81,
         reset_contacts: bool = False,
         tip_wf: bool = True,
-        debug: bool = True,
+        debug: bool = False,
         cone_approx: bool = False,
-        use_relaxed: bool = False
+        use_relaxed: bool = False,
+        object_frame: bool = False
     ):
         super(ContactForceWrenchCubeEnv, self).__init__(cube_goal_pose,
                 goal_difficulty,
@@ -809,6 +815,8 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
                 debug)
         self.cone_approx = cone_approx
         self.use_relaxed = use_relaxed
+        self.object_frame = object_frame
+
         low = -np.ones(6)
         high = np.ones(6)
         self.action_space = gym.spaces.Box(low=low, high=high)
@@ -816,6 +824,8 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         self.default_cp_params = self.cp_params = [
                 np.array([0., 1., 0.]), np.array([1., 0., 0.]), 
                 np.array([-1.,  0.,  0.])]
+        self.last_ground_face = self.default_ground_face = c_utils.get_closest_ground_face(
+                self.initializer.get_initial_state())
         self.observation_space.spaces['observation'].spaces['action'] = self.action_space
         if self.visualization:
             self.contact_viz = None
@@ -833,12 +843,20 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         self.L = cp.Variable(9, name='l')
         self.W = cp.Parameter((6,), name='w_des')
         self.G = cp.Parameter((6, 9), name='grasp_m')
-        self.R_w_2_o = cp.Parameter((6, 6), name='r_w_2_o')
         cm = np.vstack((np.eye(3), np.zeros((3, 3)))) * self.mass
+
+        inputs = [self.G, self.W, self.target_n_cp]
+        outputs = [self.L]
         # self.Cm = cp.Parameter((6, 3), value=cm*self.mass, name='com')
 
         f_g = np.array([0, 0, self._gravity])
-        w_ext = -self.W + self.R_w_2_o @ cm @ f_g
+        if self.object_frame:
+            self.R_w_2_o = cp.Parameter((6, 6), name='r_w_2_o')
+            w_ext = -self.W + self.R_w_2_o @ cm @ f_g
+            inputs.append(self.R_w_2_o)
+        else:
+            w_ext = -self.W + cm @ f_g
+
         f = self.G @ self.L + w_ext  # generated contact forces must balance wrench
 
         # Objective function - minimize force magnitudes
@@ -849,24 +867,20 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         self.constraints = []
         self.cone_constraints = []
         if self.cone_approx:
-            #constraints.append(cp.abs(L[3*i + 1]) <= self.obj_mu * L[3*i])
-            #constraints.append(cp.abs(L[3*i + 2]) <= self.obj_mu * L[3*i])
             self.cone_constraints += [cp.abs(self.L[1::3]) <= self.obj_mu * self.L[::3]]
             self.cone_constraints += [cp.abs(self.L[2::3]) <= self.obj_mu * self.L[::3]]
         else:
             self.cone_constraints.append(cp.SOC(self.obj_mu * self.L[::3],
-                                           (self.L[2::3] + self.L[1::3])[None]))
-        # constraints.append(L[::3] >= 0)
+                                         (self.L[2::3] + self.L[1::3])[None]))
         self.constraints.append(f == np.zeros(f.shape))
   
         self.prob = cp.Problem(cp.Minimize(cost), self.cone_constraints + self.constraints)
-        self.relaxed_prob = cp.Problem(cp.Minimize(cost), self.constraints)
-
         self.policy = CvxpyLayer(self.prob,
-                [self.G, self.W, self.R_w_2_o, self.target_n_cp], [self.L])
-        self.relaxed_policy = CvxpyLayer(self.relaxed_prob,
-                [self.G, self.W, self.R_w_2_o, self.target_n_cp], [self.L])
-
+                inputs, outputs)
+        if self.use_relaxed:
+            self.relaxed_prob = cp.Problem(cp.Minimize(cost), self.constraints)
+            self.relaxed_policy = CvxpyLayer(self.relaxed_prob,
+                    inputs, outputs)
         return
 
     def get_obj_position(self):
@@ -875,28 +889,50 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         obs_rot = np.asarray(cube_state[1])
         return np.concatenate([obs_pos, obs_rot])
 
+    def reset(self):
+        self.infeasible = 0
+        return super(ContactForceWrenchCubeEnv, self).reset()
+
     def step(self, action):
+        if self.clip_action:
+            action = np.clip(action, -1, 1)
+        action[:3] *= self.force_factor
+        action[3:] *= self.torque_factor
+        if not self.action_space.contains(action):
+            raise ValueError(
+                "Given action is not contained in the action space."
+            )
         forces = self.get_balance_contact_forces(action)
         if forces is None:
             forces = np.zeros(9)
             rew = self.INFEASIBLE_PENALTY
-            o, r, d, i = super(ContactForceWrenchCubeEnv, self).step(forces) 
-            i['infeasible'] = True
-            return o, rew, d, i
+            self.infeasible += 1
         else:
-            o, r, d, i = super(ContactForceWrenchCubeEnv, self).step(forces)
-            i['infeasible'] = False
-            return o, r, d, i
+            rew = None
+        o, r, d, i = super(ContactForceWrenchCubeEnv, self).step(forces) 
+        c_utils.get_closest_ground_face(
+            self.initializer.get_initial_state())
+        r = rew or r
+        i['infeasible'] = self.infeasible
+        o['observation']['action'] = action
+        return o, r, d, i
 
-    def solve_fop(self, G_t, des_wrench_t, R_w_2_o_t, relaxed=False):
-        if relaxed and self.use_relaxed:
+    def solve_fop(self, G_t, des_wrench_t, obj_pose, relaxed=False):
+        if relaxed:
             policy = self.relaxed_policy
         else:
             policy = self.policy
 
+        inputs = [G_t, des_wrench_t, self.target_n_t]
+        if self.object_frame:
+            quat_o_2_w = obj_pose[3:]
+            R_w_2_o = Rotation.from_quat(quat_o_2_w).as_matrix().T
+            R_w_2_o = block_diag(R_w_2_o, R_w_2_o)
+            R_w_2_o_t = torch.from_numpy(R_w_2_o.astype('float32'))
+            inputs.append(R_w_2_o_t)
+
         try:
-            balance_force, = policy(G_t, des_wrench_t, R_w_2_o_t,
-                                    self.target_n_t)
+            balance_force, = policy(*inputs)
         except SolverError as e:
             balance_force = None
         return balance_force
@@ -907,17 +943,10 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
 
         cp_list = self.get_cp_of_list(self.cp_params)
 
-        # Get world to object rotation matrix
-        quat_o_2_w = obj_pose[3:]
-        R_w_2_o = Rotation.from_quat(quat_o_2_w).as_matrix().T
-        R_w_2_o = block_diag(R_w_2_o, R_w_2_o)
-        R_w_2_o_t = torch.from_numpy(R_w_2_o.astype('float32'))
-
-        # Get grasp matrix
+       # Get grasp matrix
         G = self.get_grasp_matrix(cp_list, obj_pose)
 
         if self.step_count == 1 and self.debug:
-            gymlogger.debug("Grasp matrix:\n{}".format(np.round(G,4)))
             import pdb; pdb.set_trace()
         G_t = torch.from_numpy(G.astype('float32'))
   
@@ -925,23 +954,22 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         # des_wrench = des_wrench.squeeze().unsqueeze(-1)
         des_wrench_t = torch.from_numpy(des_wrench.astype('float32'))
   
-        balance_force = self.solve_fop(G_t, des_wrench_t, R_w_2_o_t)
+        balance_force = self.solve_fop(G_t, des_wrench_t, obj_pose)
  
+        # Check if solution was feasible
         if balance_force is None:
-            if self.debug:
-                gymlogger.debug('Did not solve contact force opt for '
-                      'desired wrench: {}, contact points: {}'.format(
-                        des_wrench, self.cp_params))
-            balance_force = self.solve_fop(G_t, des_wrench_t, R_w_2_o_t,
-                                           relaxed=True)
-            if balance_force is None:
-                if self.debug:
-                    import pdb; pdb.set_trace()
-                return balance_force
-
-        balance_f = balance_force.detach().numpy()
-        # gymlogger.debug("Balance force test: {}".format(G @ balance_f))
-        return np.squeeze(balance_f)
+            gymlogger.debug('Did not solve contact force opt for '
+                  'desired wrench: {}, contact points: {}'.format(
+                    des_wrench, self.cp_params))
+            if self.use_relaxed:
+                balance_force = self.solve_fop(G_t, des_wrench_t, obj_pose,
+                                               relaxed=True)
+                balance_force = np.squeeze(balance_force.detach().numpy())
+        else:
+            balance_force = np.squeeze(balance_force.detach().numpy())
+        if balance_force is not None and self.debug:
+            gymlogger.debug("Balance force test: {}".format(G @ balance_f))
+        return balance_force 
 
     def get_grasp_matrix(self, cp_list, obj_pose):
         GT_list = []
@@ -958,31 +986,34 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         return GT.T
 
     def _get_grasp_matrix_single_cp(self, cp_of, obj_pose):
-        P = self._get_P_matrix(cp_of)
-        # quat_o_2_w = obj_pose[3:]
+        P = self._get_P_matrix(cp_of, obj_pose)
+        quat_o_2_w = obj_pose[3:]
         quat_cp_2_o = cp_of.quat_of
 
         # Orientation of cp frame w.r.t. world frame
         # quat_cp_2_w = quat_o_2_w * quat_cp_2_o
-        # R_cp_2_w = Rotation.from_quat(quat_o_2_w) * Rotation.from_quat(quat_cp_2_o)
         # R is rotation matrix from contact frame i to world frame
-        R_cp_2_o = Rotation.from_quat(quat_cp_2_o).as_matrix()
-        # R = R_cp_2_w.as_matrix()
-        R_bar_o = np.zeros((6,6))
-        R_bar_o[0:3,0:3] = R_cp_2_o
-        R_bar_o[3:6,3:6] = R_cp_2_o
+        if self.object_frame:
+            rot = Rotation.from_quat(quat_cp_2_o)
+        else:
+            rot = Rotation.from_quat(quat_o_2_w) * Rotation.from_quat(quat_cp_2_o)
+        R = rot.as_matrix()
+        R_bar = block_diag(R, R)
 
-        # R_bar_of = R_bar_o.T @ P.T
-        G = P @ R_bar_o
+        G = P @ R_bar
         return G.T
   
-    def _get_P_matrix(self, cp_of):
+    def _get_P_matrix(self, cp_of, obj_pose):
         cp_pos_of = cp_of.pos_of # Position of contact point in object frame
-
+        quat_o_2_w = obj_pose[3:]
+        if self.object_frame:
+            r = cp_pos_of
+        else:
+            r  = Rotation.from_quat(quat_o_2_w).as_matrix() @ cp_pos_of
         S = np.array([
-                     [0, -cp_pos_of[2], cp_pos_of[1]],
-                     [cp_pos_of[2], 0, -cp_pos_of[0]],
-                     [-cp_pos_of[1], cp_pos_of[0], 0]
+                     [0, -r[2], r[1]],
+                     [r[2], 0, -r[0]],
+                     [-r[1], r[0], 0]
                      ])
 
         P = np.eye(6)
@@ -997,9 +1028,7 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
                       [0, 1, 0, 0, 0, 0],
                       [0, 0, 1, 0, 0, 0],
                       ])
-        H = np.zeros((l_i*fnum,obj_dof*fnum))
-        for i in range(fnum):
-          H[i*l_i:i*l_i+l_i, i*obj_dof:i*obj_dof+obj_dof] = H_i
+        H = block_diag(H_i, H_i, H_i)
         return H
 
 

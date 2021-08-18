@@ -118,7 +118,7 @@ def make_env_cls(diff=3, initializer='training_init',
             reward_fn=reward_fn,
             termination_fn=termination_fn,
             force_factor=1.,
-            torque_factor=1.,
+            torque_factor=.1,
             **env_kwargs)
     return env_cls
 
@@ -127,16 +127,12 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
                      reward_fn=None, termination_fn=None, save_mp4=False,
                      save_dir='', save_freq=1, initializer=None,
                      residual=False, env_cls=None, flatten_goal=True,
-                     **env_kwargs):
+                     scale=None, **env_kwargs):
     reward_fn = get_reward_fn(reward_fn)
 
     goal = None
     if initializer is None:
-        initializer = initializers.centered_init(diff)
-    elif initializer =='center':
         initializer = initializers.centered_init
-    elif initializer == 'train':
-        initializer = initializers.training_init
     elif initializer == 'fixed':
         from trifinger_simulation.tasks.move_cube import Pose
         import json
@@ -146,27 +142,29 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
     else:
         initializer = get_initializer(initializer)(diff)
 
+
     if termination_fn is not None:
         termination_fn = get_termination_fn(termination_fn)
 
-    info_keywords = ('ori_err', 'pos_err'),
+    info_keywords = ('ori_err', 'pos_err')
     if env_cls == 'wrench_env':
         info_keywords = ('ori_err', 'pos_err', 'infeasible')
         
     env_cls = get_env_cls(env_cls)
 
     def env_fn():
-        force_factor, torque_factor = .25, .1
+        # TODO (fix): hard-coding force and torque factor 
+        force_factor, torque_factor = scale or (1., .1)
         if residual:
-            r_force_factor, r_torque_factor = .1, .25
+            r_force_factor, r_torque_factor = force_factor, torque_factor
             force_factor, torque_factor = 1., 1.
         env = env_cls(goal, diff,
                 initializer=initializer,
                 episode_length=episode_length,
                 relative_goal=relative_goal,
                 reward_fn=reward_fn,
-                force_factor=1.,
-                torque_factor=.1,
+                force_factor=force_factor,
+                torque_factor=torque_factor,
                 termination_fn=termination_fn,
                 **env_kwargs)
         if residual:
@@ -177,7 +175,8 @@ def env_fn_generator(diff=3, episode_length=500, relative_goal=True,
         elif env_kwargs.get('visualization', False):
             env = wrappers.PyBulletClearGUIWrapper(env)
         if flatten_goal:
-            env = wrappers.FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 'observation'])
+            env = wrappers.FlattenGoalObs(env, ['desired_goal', 'achieved_goal', 
+                                                'observation'])
         return wrappers.Monitor(env, info_keywords=info_keywords)
     return env_fn
 
