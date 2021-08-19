@@ -40,15 +40,18 @@ class RandomInitializer:
 
 
 class EvalEpisodesInitializer:
-    '''Initialize episodes according to json files saved in eval_episodes'''
+    """Initialize episodes according to json files saved in eval_episodes"""
 
     def __init__(self, difficulty):
         self._counter = 0
         self.difficulty = difficulty
-        self.eval_dir = 'eval_episodes/level{}'.format(difficulty)
+        self.eval_dir = "eval_episodes/level{}".format(difficulty)
         self.episodes = []
         # self._load_episodes()
-        self._init_flag = [False, False]  # Flag to maintain the initialization counter without assuming if get_initial_state is called before get_goal
+        self._init_flag = [
+            False,
+            False,
+        ]  # Flag to maintain the initialization counter without assuming if get_initial_state is called before get_goal
 
     def get_initial_state(self):
         if not self.episodes:
@@ -65,31 +68,45 @@ class EvalEpisodesInitializer:
         return ret
 
     def _update_counter(self):
-        '''update the counter which is maintained to avoid accessing non-existing evaluation episode'''
-        assert self._counter < len(self.episodes), 'Only {} eval episodes found, however, the function is called {} times'.format(len(self.episodes), self._counter)
+        """update the counter which is maintained to avoid accessing non-existing evaluation episode"""
+        assert self._counter < len(
+            self.episodes
+        ), "Only {} eval episodes found, however, the function is called {} times".format(
+            len(self.episodes), self._counter
+        )
         if all(self._init_flag):
             self._counter += 1
             self._init_flag = [False, False]
 
     def _load_episodes(self):
-        assert os.path.isdir(self.eval_dir), 'Make sure that you have generated evaluation episodes'
-        EvalEpisode = namedtuple('EvalEpisode', ['initial_state', 'goal'])
+        assert os.path.isdir(
+            self.eval_dir
+        ), "Make sure that you have generated evaluation episodes"
+        EvalEpisode = namedtuple("EvalEpisode", ["initial_state", "goal"])
         files = os.listdir(self.eval_dir)
-        assert len(files) % 2 == 0, 'Even number of files are expected in {}'.format(self.eval_dir)
+        assert len(files) % 2 == 0, "Even number of files are expected in {}".format(
+            self.eval_dir
+        )
         num_episodes = len(files) // 2
         for i in range(num_episodes):
-            with open(os.path.join(self.eval_dir, '{:05d}-init.json'.format(i)), 'r') as f:
+            with open(
+                os.path.join(self.eval_dir, "{:05d}-init.json".format(i)), "r"
+            ) as f:
                 init = Pose.from_json(f.read())
-            with open(os.path.join(self.eval_dir, '{:05d}-goal.json'.format(i)), 'r') as f:
+            with open(
+                os.path.join(self.eval_dir, "{:05d}-goal.json".format(i)), "r"
+            ) as f:
                 goal = Pose.from_json(f.read())
             self.episodes.append(EvalEpisode(init, goal))
 
 
 class Task4SmallRotation:
-    def __init__(self, difficulty, orientation_error_threshold=np.pi/2 * 0.5):
+    def __init__(self, difficulty, orientation_error_threshold=np.pi / 2 * 0.5):
         if difficulty != 4:
-            raise ValueError("Task4SmallRotation initializer should only be "
-                             f"used with goal difficulty 4. difficulty: {difficulty}")
+            raise ValueError(
+                "Task4SmallRotation initializer should only be "
+                f"used with goal difficulty 4. difficulty: {difficulty}"
+            )
         self.difficulty = 4
         self.init = None
         self.orientation_error_threshold = orientation_error_threshold
@@ -102,8 +119,9 @@ class Task4SmallRotation:
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
         ori_error = 100000  # some large value
-        while ori_error < np.pi/2 * 0.1 or \
-              ori_error > self.orientation_error_threshold:
+        while (
+            ori_error < np.pi / 2 * 0.1 or ori_error > self.orientation_error_threshold
+        ):
             goal = move_cube.sample_goal(difficulty=4)
             # goal.position[:2] = self.init.position[:2]  # TEMP: align x and y
             ori_error = self._weighted_orientation_error(goal)
@@ -121,9 +139,7 @@ class Task4SmallRotation:
         range_xy_dist = _ARENA_RADIUS * 2
         range_z_dist = _max_height
 
-        xy_dist = np.linalg.norm(
-            goal.position[:2] - self.init.position[:2]
-        )
+        xy_dist = np.linalg.norm(goal.position[:2] - self.init.position[:2])
         z_dist = abs(goal.position[2] - self.init.position[2])
         # weight xy- and z-parts by their expected range
         return (xy_dist / range_xy_dist + z_dist / range_z_dist) / 2
@@ -147,9 +163,7 @@ class TrainingInitializer:
 
             # sample orientation
             projected_goal_ori = project_cube_xy_plane(self.goal.orientation)
-            z_rot_noise = Rotation.from_euler(
-                'z', (np.pi / 2 * 0.70) * random.random()
-            )
+            z_rot_noise = Rotation.from_euler("z", (np.pi / 2 * 0.70) * random.random())
             init.orientation = (
                 z_rot_noise * Rotation.from_quat(projected_goal_ori)
             ).as_quat()
@@ -159,8 +173,9 @@ class TrainingInitializer:
         """Get a random goal depending on the difficulty."""
         if self.difficulty == 4:
             if self.goal is None:
-                raise ValueError("Goal is unset. Call get_initial_state before "
-                                 "get_goal.")
+                raise ValueError(
+                    "Goal is unset. Call get_initial_state before " "get_goal."
+                )
             else:
                 goal = self.goal
                 self.goal = None
@@ -199,9 +214,11 @@ class BOInitializer:
             difficulty (int):  Difficulty level for sampling goals.
         """
         self.difficulty = difficulty
-        with open("/ws/src/usercode/rrc/cic/bayesian_opt/content/pos.pkl", 'rb') as f:
+        with open("/ws/src/usercode/rrc/cic/bayesian_opt/content/pos.pkl", "rb") as f:
             init_arr_params = pkl.load(f)
-        with open("/ws/src/usercode/rrc/cic/bayesian_opt/content/iter_idx.txt", 'r') as f:
+        with open(
+            "/ws/src/usercode/rrc/cic/bayesian_opt/content/iter_idx.txt", "r"
+        ) as f:
             curr_idx = int(f.readline())
         self.init_information = np.asarray(init_arr_params[:, curr_idx], dtype=float)
 
@@ -209,7 +226,9 @@ class BOInitializer:
         """Get the initial position based on the information from the file. Do not read z coordinate to ensure
         that this position is on the ground plane"""
         ex_state = move_cube.sample_goal(difficulty=-1)
-        ex_state.position = self.init_information[0:2] # read only two values, z-coordinate is unchanged
+        ex_state.position = self.init_information[
+            0:2
+        ]  # read only two values, z-coordinate is unchanged
         ex_state.orientation = self.init_information[3:7]
         return ex_state
 
@@ -224,8 +243,10 @@ class BOInitializer:
 class FixedGoalInitializer(RandomInitializer):
     def __init__(self, difficulty, default_goal=None):
         if default_goal is None:
-            default_goal = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
-                            'orientation': np.array([0,0,0,1])}
+            default_goal = {
+                "position": np.array([0, 0, CUBE_HALF_WIDTH]),
+                "orientation": np.array([0, 0, 0, 1]),
+            }
         self.default_goal = default_goal
         super().__init__(difficulty)
 
@@ -243,8 +264,10 @@ class FixedGoalInitializer(RandomInitializer):
 class FixedInitializer(RandomInitializer):
     def __init__(self, difficulty, default_goal=None, default_initial_state=None):
         if default_goal is None:
-            default_goal = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
-                            'orientation': np.array([0,0,0,1])}
+            default_goal = {
+                "position": np.array([0, 0, CUBE_HALF_WIDTH]),
+                "orientation": np.array([0, 0, 0, 1]),
+            }
         self.default_goal = default_goal
         self.default_initial_state = default_initial_state
         super().__init__(difficulty)
@@ -266,11 +289,15 @@ class FixedInitializer(RandomInitializer):
 class DumbInitializer(RandomInitializer):
     def __init__(self, difficulty, default_goal=None, default_initial_state=None):
         if default_goal is None:
-            default_goal = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
-                            'orientation': np.array([0,0,0,1])}
+            default_goal = {
+                "position": np.array([0, 0, CUBE_HALF_WIDTH]),
+                "orientation": np.array([0, 0, 0, 1]),
+            }
         if default_initial_state is None:
-            default_initial_state = {'position': np.array([0,0,CUBE_HALF_WIDTH]),
-                            'orientation': np.array([0,0,0,1])}
+            default_initial_state = {
+                "position": np.array([0, 0, CUBE_HALF_WIDTH]),
+                "orientation": np.array([0, 0, 0, 1]),
+            }
 
         self.default_goal = default_goal
         self.default_initial_state = default_initial_state
@@ -288,8 +315,6 @@ class DumbInitializer(RandomInitializer):
         goal = move_cube.Pose.from_dict(self.default_goal)
         goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
         return goal
-
-
 
 
 random_init = RandomInitializer

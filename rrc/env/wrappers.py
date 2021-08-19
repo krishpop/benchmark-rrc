@@ -18,15 +18,20 @@ try:
 except ImportError:
     Xvfb = None
 
-EXCEP_MSSG = "================= captured exception =================\n" + \
-    "{message}\n" + "{error}\n" + '=================================='
+EXCEP_MSSG = (
+    "================= captured exception =================\n"
+    + "{message}\n"
+    + "{error}\n"
+    + "=================================="
+)
 
 
 class frameskip_to:
-    '''
+    """
     A Context Manager that sets action type and action space temporally
     This applies to all wrappers and the origianl environment recursively
-    '''
+    """
+
     def __init__(self, frameskip, env):
         self.frameskip = frameskip
         self.env = env
@@ -40,10 +45,10 @@ class frameskip_to:
 
 
 class action_type_to:
-    '''
+    """
     A Context Manager that sets action type and action space temporally
     This applies to all wrappers and the origianl environment recursively
-    '''
+    """
 
     def __init__(self, action_type, env):
         self.action_type = action_type
@@ -54,7 +59,7 @@ class action_type_to:
     def get_config(self, env):
         self.orig_action_spaces = [env.action_type]
         self.orig_action_types = [env.action_space]
-        while hasattr(env, 'env'):
+        while hasattr(env, "env"):
             env = env.env
             self.orig_action_types.append(env.action_type)
             self.orig_action_spaces.append(env.action_space)
@@ -63,7 +68,7 @@ class action_type_to:
         env = self.env
         env.action_space = self.action_space
         env.action_type = self.action_type
-        while hasattr(env, 'env'):
+        while hasattr(env, "env"):
             env = env.env
             env.action_space = self.action_space
             env.action_type = self.action_type
@@ -73,7 +78,7 @@ class action_type_to:
         env = self.env
         env.action_space = self.orig_action_spaces[ind]
         env.action_type = self.orig_action_types[ind]
-        while hasattr(env, 'env'):
+        while hasattr(env, "env"):
             ind += 1
             env = env.env
             env.action_space = self.orig_action_spaces[ind]
@@ -83,6 +88,7 @@ class action_type_to:
         import gym
         from trifinger_simulation import TriFingerPlatform
         from rrc.env.cube_env import ActionType
+
         spaces = TriFingerPlatform.spaces
         if action_type == ActionType.TORQUE:
             action_space = spaces.robot_torque.gym
@@ -96,9 +102,8 @@ class action_type_to:
                 }
             )
         else:
-            raise ValueError('unknown action type')
+            raise ValueError("unknown action type")
         return action_space
-
 
 
 class NewToOldObsWrapper(gym.ObservationWrapper):
@@ -118,41 +123,47 @@ class NewToOldObsWrapper(gym.ObservationWrapper):
 
         self.observation_space = gym.spaces.Dict(
             {
-                "robot_position": env.observation_space['robot']['position'],
-                "robot_velocity": env.observation_space['robot']['velocity'],
-                "robot_torque": env.observation_space['robot']['torque'],
-                "robot_tip_positions": env.observation_space['robot']['tip_positions'],
+                "robot_position": env.observation_space["robot"]["position"],
+                "robot_velocity": env.observation_space["robot"]["velocity"],
+                "robot_torque": env.observation_space["robot"]["torque"],
+                "robot_tip_positions": env.observation_space["robot"]["tip_positions"],
                 "object_position": env.observation_space["achieved_goal"]["position"],
-                "object_orientation": env.observation_space["achieved_goal"]["orientation"],
-                "goal_object_position": env.observation_space["desired_goal"]["position"],
-                "goal_object_orientation": env.observation_space["desired_goal"]["orientation"],
+                "object_orientation": env.observation_space["achieved_goal"][
+                    "orientation"
+                ],
+                "goal_object_position": env.observation_space["desired_goal"][
+                    "position"
+                ],
+                "goal_object_orientation": env.observation_space["desired_goal"][
+                    "orientation"
+                ],
                 "tip_force": env.observation_space["robot"]["tip_force"],
-                "action_torque": env.observation_space['robot']['torque'],
-                "action_position": env.observation_space['robot']['position'],
+                "action_torque": env.observation_space["robot"]["torque"],
+                "action_position": env.observation_space["robot"]["position"],
             }
         )
 
     def observation(self, obs):
         old_obs = {
-            "robot_position": obs['robot']['position'],
-            "robot_velocity": obs['robot']['velocity'],
-            "robot_torque": obs['robot']['torque'],
-            "robot_tip_positions": obs['robot']['tip_positions'],
-            "tip_force": obs['robot']['tip_force'],
-            "object_position": obs['achieved_goal']['position'],
-            "object_orientation": obs['achieved_goal']['orientation'],
-            "goal_object_position": obs['desired_goal']['position'],
-            "goal_object_orientation": obs['desired_goal']['orientation'],
+            "robot_position": obs["robot"]["position"],
+            "robot_velocity": obs["robot"]["velocity"],
+            "robot_torque": obs["robot"]["torque"],
+            "robot_tip_positions": obs["robot"]["tip_positions"],
+            "tip_force": obs["robot"]["tip_force"],
+            "object_position": obs["achieved_goal"]["position"],
+            "object_orientation": obs["achieved_goal"]["orientation"],
+            "goal_object_position": obs["desired_goal"]["position"],
+            "goal_object_orientation": obs["desired_goal"]["orientation"],
         }
-        if self.action_space == self.observation_space['robot_position']:
-            old_obs['action_torque'] = np.zeros_like(obs['action'])
-            old_obs['action_position'] = obs['action']
-        elif self.action_space == self.observation_space['robot_torque']:
-            old_obs['action_torque'] = obs['action']
-            old_obs['action_position'] = np.zeros_like(obs['action'])
+        if self.action_space == self.observation_space["robot_position"]:
+            old_obs["action_torque"] = np.zeros_like(obs["action"])
+            old_obs["action_position"] = obs["action"]
+        elif self.action_space == self.observation_space["robot_torque"]:
+            old_obs["action_torque"] = obs["action"]
+            old_obs["action_position"] = np.zeros_like(obs["action"])
         else:
-            old_obs['action_torque'] = obs['action']['torque']
-            old_obs['action_position'] = obs['action']['position']
+            old_obs["action_torque"] = obs["action"]["torque"]
+            old_obs["action_position"] = obs["action"]["position"]
         return old_obs
 
 
@@ -161,51 +172,54 @@ class AdaptiveActionSpaceWrapper(gym.Wrapper):
 
     def __init__(self, env):
         super().__init__(env)
-        self.action_space = gym.spaces.Dict({
-            'position': gym.spaces.Box(
-                low=trifingerpro_limits.robot_position.low,
-                high=trifingerpro_limits.robot_position.high,
-            ),
-            'torque': gym.spaces.Box(
-                low=trifingerpro_limits.robot_torque.low,
-                high=trifingerpro_limits.robot_torque.high,
-            ),
-            'frameskip': gym.spaces.Box(low=np.zeros(1),
-                                        high=np.inf * np.ones(1))
-        })
+        self.action_space = gym.spaces.Dict(
+            {
+                "position": gym.spaces.Box(
+                    low=trifingerpro_limits.robot_position.low,
+                    high=trifingerpro_limits.robot_position.high,
+                ),
+                "torque": gym.spaces.Box(
+                    low=trifingerpro_limits.robot_torque.low,
+                    high=trifingerpro_limits.robot_torque.high,
+                ),
+                "frameskip": gym.spaces.Box(low=np.zeros(1), high=np.inf * np.ones(1)),
+            }
+        )
 
     def _clip_action(self, action):
-        clipped_action = {'torque': None, 'position': None,
-                          'frameskip': action['frameskip']}
-        if action['torque'] is not None:
-            clipped_action['torque'] = np.clip(
-                action['torque'],
-                self.action_space['torque'].low,
-                self.action_space['torque'].high
+        clipped_action = {
+            "torque": None,
+            "position": None,
+            "frameskip": action["frameskip"],
+        }
+        if action["torque"] is not None:
+            clipped_action["torque"] = np.clip(
+                action["torque"],
+                self.action_space["torque"].low,
+                self.action_space["torque"].high,
             )
-        if action['position'] is not None:
-            clipped_action['position'] = np.clip(
-                action['position'],
-                self.action_space['position'].low,
-                self.action_space['position'].high
+        if action["position"] is not None:
+            clipped_action["position"] = np.clip(
+                action["position"],
+                self.action_space["position"].low,
+                self.action_space["position"].high,
             )
         return clipped_action
 
     def step(self, action):
         action = self._clip_action(action)
-        with frameskip_to(action['frameskip'], self.env):
-            if action['torque'] is None:
+        with frameskip_to(action["frameskip"], self.env):
+            if action["torque"] is None:
                 with action_type_to(ActionType.POSITION, self.env):
-                    return self.env.step(action['position'])
-            elif action['position'] is None:
+                    return self.env.step(action["position"])
+            elif action["position"] is None:
                 with action_type_to(ActionType.TORQUE, self.env):
-                    return self.env.step(action['torque'])
+                    return self.env.step(action["torque"])
             else:
                 with action_type_to(ActionType.TORQUE_AND_POSITION, self.env):
-                    return self.env.step({
-                        'position': action['position'],
-                        'torque': action['torque']
-                    })
+                    return self.env.step(
+                        {"position": action["position"], "torque": action["torque"]}
+                    )
 
 
 class TimingWrapper(gym.Wrapper):
@@ -229,7 +243,7 @@ class TimingWrapper(gym.Wrapper):
                 time.sleep(min_elapsed_time - elapsed_time)
 
         self.t = time.time()
-        self.frameskip = action['frameskip']
+        self.frameskip = action["frameskip"]
         return self.env.step(action)
 
 
@@ -244,9 +258,15 @@ class RenderWrapper(gym.Wrapper):
 
     def reset(self):
         import pybullet as p
+
         obs = self.env.reset()
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-        p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
+        p.resetDebugVisualizerCamera(
+            cameraDistance=0.6,
+            cameraYaw=0,
+            cameraPitch=-40,
+            cameraTargetPosition=[0, 0, 0],
+        )
         self._accum_reward = 0
         self._reward_at_step = 0
         if self._initial_reset:
@@ -262,26 +282,57 @@ class RenderWrapper(gym.Wrapper):
         self._reward_at_step = reward
         return observation, reward, is_done, info
 
-    def render(self, mode='rgb_array', **kwargs):
-        assert mode == 'rgb_array', 'RenderWrapper Only supports rgb_array mode'
-        images = self.cameras.cameras[0].get_image(), self.cameras.cameras[1].get_image()
+    def render(self, mode="rgb_array", **kwargs):
+        assert mode == "rgb_array", "RenderWrapper Only supports rgb_array mode"
+        images = (
+            self.cameras.cameras[0].get_image(),
+            self.cameras.cameras[1].get_image(),
+        )
         height = images[0].shape[1]
         two_views = np.concatenate((images[0], images[1]), axis=1)
-        two_views = cv2.putText(two_views, 'step_count: {:06d}'.format(self.env.unwrapped.step_count), (10, 40),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, color=(0, 0, 0),
-                    thickness=1, lineType=cv2.LINE_AA)
+        two_views = cv2.putText(
+            two_views,
+            "step_count: {:06d}".format(self.env.unwrapped.step_count),
+            (10, 40),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=0.7,
+            color=(0, 0, 0),
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
 
-        two_views = cv2.putText(two_views, 'episode: {}'.format(self._episode_idx), (10, 70),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, color=(0, 0, 0),
-                    thickness=1, lineType=cv2.LINE_AA)
+        two_views = cv2.putText(
+            two_views,
+            "episode: {}".format(self._episode_idx),
+            (10, 70),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=0.7,
+            color=(0, 0, 0),
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
 
-        two_views = cv2.putText(two_views, 'reward: {:.2f}'.format(self._reward_at_step), (10, height - 130),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, color=(255, 255, 255),
-                    thickness=1, lineType=cv2.LINE_AA)
+        two_views = cv2.putText(
+            two_views,
+            "reward: {:.2f}".format(self._reward_at_step),
+            (10, height - 130),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=0.7,
+            color=(255, 255, 255),
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
 
-        two_views = cv2.putText(two_views, 'acc_reward: {:.2f}'.format(self._accum_reward), (10, height - 100),
-                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.7, color=(255, 255, 255),
-                    thickness=1, lineType=cv2.LINE_AA)
+        two_views = cv2.putText(
+            two_views,
+            "acc_reward: {:.2f}".format(self._accum_reward),
+            (10, height - 100),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=0.7,
+            color=(255, 255, 255),
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
 
         return two_views
 
@@ -292,8 +343,12 @@ class PyBulletClearGUIWrapper(gym.Wrapper):
         self.camera_kwargs = kwargs
 
     def reset(self, camera_kwargs=dict(), **kwargs):
-        cam_kwargs = dict(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, 
-                          cameraTargetPosition=[0,0,0])
+        cam_kwargs = dict(
+            cameraDistance=0.6,
+            cameraYaw=0,
+            cameraPitch=-40,
+            cameraTargetPosition=[0, 0, 0],
+        )
         cam_kwargs.update(self.camera_kwargs)
         cam_kwargs.update(camera_kwargs)
         obs = self.env.reset(**kwargs)
@@ -306,8 +361,12 @@ class MonitorPyBulletWrapper(gym.Wrapper):
     def __init__(self, env, save_dir, save_freq=1):
         env = PyBulletClearGUIWrapper(env)
         super(MonitorPyBulletWrapper, self).__init__(env)
-        assert Xvfb is not None, "xvfbwrapper not installed, make sure `pip install xvfbwrapper` is called"
-        assert env.unwrapped.visualization, "passed MonitorPyBullet env with visualization=False"
+        assert (
+            Xvfb is not None
+        ), "xvfbwrapper not installed, make sure `pip install xvfbwrapper` is called"
+        assert (
+            env.unwrapped.visualization
+        ), "passed MonitorPyBullet env with visualization=False"
         self.save_dir = save_dir
         self.save_freq = save_freq
         self.xvfb = None
@@ -322,18 +381,26 @@ class MonitorPyBulletWrapper(gym.Wrapper):
             self.stop_recording()
         self.episode_count += 1
         if self.xvfb is None:
-            env_display = os.environ.get('DISPLAY', '')
-            if not env_display or 'localhost' in env_display:
+            env_display = os.environ.get("DISPLAY", "")
+            if not env_display or "localhost" in env_display:
                 self.xvfb = Xvfb()
                 self.xvfb.start()
         obs = self.env.reset()
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         if (self.episode_count - 1) % self.save_freq == 0:
             filepath = self.create_filepath()
-            p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, filepath,
-                                physicsClientId=self.env.unwrapped._pybullet_client_id)
+            p.startStateLogging(
+                p.STATE_LOGGING_VIDEO_MP4,
+                filepath,
+                physicsClientId=self.env.unwrapped._pybullet_client_id,
+            )
             self.recording = True
-        p.resetDebugVisualizerCamera(cameraDistance=0.6, cameraYaw=0, cameraPitch=-40, cameraTargetPosition=[0,0,0])
+        p.resetDebugVisualizerCamera(
+            cameraDistance=0.6,
+            cameraYaw=0,
+            cameraPitch=-40,
+            cameraTargetPosition=[0, 0, 0],
+        )
         return obs
 
     def step(self, action):
@@ -347,8 +414,10 @@ class MonitorPyBulletWrapper(gym.Wrapper):
         if self.env.unwrapped._pybullet_client_id >= 0 and len(self.videos) > 0:
             print("Stopping recording {}".format(self.videos[-1]))
             if (self.episode_count - 1) % self.save_freq == 0:
-                p.stopStateLogging(p.STATE_LOGGING_VIDEO_MP4,
-                        physicsClientId=self.env.unwrapped._pybullet_client_id)
+                p.stopStateLogging(
+                    p.STATE_LOGGING_VIDEO_MP4,
+                    physicsClientId=self.env.unwrapped._pybullet_client_id,
+                )
             # self.env.unwrapped._disconnect_from_pybullet()
 
     def close(self):
@@ -361,15 +430,22 @@ class MonitorPyBulletWrapper(gym.Wrapper):
         filepath = lambda i: osp.join(self.save_dir, f"sim-{i}.mp4")
         for i in range(25):
             if not osp.exists(filepath(i)):
-              break
+                break
         filepath = filepath(i)
         self.videos.append(filepath)
         return filepath
 
 
 class ResidualPDWrapper(gym.Wrapper):
-    def __init__(self, env, Kp=np.eye(3)*np.array([100,100,1]), Kd=1, include_ac=False,
-                 force_factor=.1, torque_factor=.25):
+    def __init__(
+        self,
+        env,
+        Kp=np.eye(3) * np.array([100, 100, 1]),
+        Kd=1,
+        include_ac=False,
+        force_factor=0.1,
+        torque_factor=0.25,
+    ):
         super(ResidualPDWrapper, self).__init__(env)
         self.Kp = Kp
         self.Kd = Kd
@@ -379,16 +455,16 @@ class ResidualPDWrapper(gym.Wrapper):
         self.torque_factor = torque_factor
         if self.include_ac:
             obs_dict = self.env.observation_space.spaces
-            obs_dict = {k: obs_dict['observation'][k] for k in obs_dict['observation']}
-            obs_dict['pd_action'] = gym.spaces.Box(low=-np.ones(3), high=np.ones(3))
-            self.observation_space.spaces['observation'] = obs_dict
+            obs_dict = {k: obs_dict["observation"][k] for k in obs_dict["observation"]}
+            obs_dict["pd_action"] = gym.spaces.Box(low=-np.ones(3), high=np.ones(3))
+            self.observation_space.spaces["observation"] = obs_dict
 
     def reset(self):
         obs = super(ResidualPDWrapper, self).reset()
         self._prev_obs = None
         self._obs = obs
         if self.include_ac:
-            obs['observation']['pd_action'] = self.pd_action(self._obs, self._prev_obs)
+            obs["observation"]["pd_action"] = self.pd_action(self._obs, self._prev_obs)
         return obs
 
     def step(self, action):
@@ -400,19 +476,22 @@ class ResidualPDWrapper(gym.Wrapper):
         obs, r, d, i = self.env.step(ac)
         self._obs = obs
         if self.include_ac:
-            obs['observation']['pd_action'] = self.pd_action(self._obs, self._prev_obs)
+            obs["observation"]["pd_action"] = self.pd_action(self._obs, self._prev_obs)
         return obs, r, d, i
 
     def pd_action(self, observation, prev_observation):
         if observation is None:
             return np.zeros(6)
-        if observation['observation'].get('pd_action') is not None:
-            return observation['observation']['pd_action']
-        err = observation['observation']['position']
+        if observation["observation"].get("pd_action") is not None:
+            return observation["observation"]["pd_action"]
+        err = observation["observation"]["position"]
         u = -self.Kp @ err
         if prev_observation is None:
             return np.concatenate([u, np.zeros(3)], axis=-1)
-        err_diff = observation['observation']['position'] - prev_observation['observation']['position']
+        err_diff = (
+            observation["observation"]["position"]
+            - prev_observation["observation"]["position"]
+        )
         u -= self.Kd * err_diff / self.env.time_step_s
         return np.concatenate([u, np.zeros(3)], axis=-1)
 
@@ -433,5 +512,3 @@ class FlattenGoalObs(ObservationWrapper):
             else:
                 n_obs[k] = obs[k]
         return n_obs
-
-

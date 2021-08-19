@@ -2,11 +2,11 @@ import numpy as np
 
 
 class LinearSchedule:
-    def __init__(self, n_steps=100, start=0., end=-9.81, rounding=True):
+    def __init__(self, n_steps=100, start=0.0, end=-9.81, rounding=True):
         self.current = start
         self.step_size = (end - start) / n_steps
         self.n_steps = n_steps
-        self.current_step = 0.
+        self.current_step = 0.0
         self.rounding = rounding
 
     def __call__(self):

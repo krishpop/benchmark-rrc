@@ -21,9 +21,9 @@ def pos_and_rot_close_to_goal(observation):
 
 
 def _orientation_error(observation):
-    '''copied from reward_fns.py'''
-    goal_rot = Rotation.from_quat(observation['desired_goal']['orientation'])
-    actual_rot = Rotation.from_quat(observation['achieved_goal']['orientation'])
+    """copied from reward_fns.py"""
+    goal_rot = Rotation.from_quat(observation["desired_goal"]["orientation"])
+    actual_rot = Rotation.from_quat(observation["achieved_goal"]["orientation"])
     error_rot = goal_rot.inv() * actual_rot
     return error_rot.magnitude() / np.pi
 
@@ -32,7 +32,9 @@ class StayCloseToGoal(object):
     def __init__(self, success_steps=30, is_level_4=False):
         self.counter = 0
         self.success_steps = success_steps
-        self.goal_check = pos_and_rot_close_to_goal if is_level_4 else position_close_to_goal
+        self.goal_check = (
+            pos_and_rot_close_to_goal if is_level_4 else position_close_to_goal
+        )
 
     def __call__(self, observation):
         if self.goal_check(observation):
