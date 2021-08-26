@@ -1,9 +1,13 @@
-import rrc.env.wrappers as wrappers
+import functools
+import json
 import os.path as osp
-from .cube_env import RealRobotCubeEnv, ActionType
-from rrc.env import initializers, cube_env
-from trifinger_simulation.tasks.move_cube import Pose
+
+import rrc.env.wrappers as wrappers
 from gym.wrappers import Monitor
+from rrc.env import cube_env, initializers
+from trifinger_simulation.tasks.move_cube import Pose
+
+from .cube_env import ActionType, RealRobotCubeEnv
 
 
 def get_env_cls(name):
@@ -111,27 +115,26 @@ def make_env_cls(
     diff=3,
     initializer="training_init",
     episode_length=500,
-    relative_goal=True,
     reward_fn=None,
     termination_fn=False,
     **env_kwargs,
 ):
     if reward_fn is None:
-        reward_fn = training_reward4
+        reward_fn = get_reward_fn("train4")
     else:
         reward_fn = get_reward_fn(reward_fn)
 
     if termination_fn:
-        termination_fn = stay_close_to_goal if diff < 4 else stay_close_to_goal_level_4
+        if diff < 4:
+            termination_fn = get_termination_fn("stay_close_to_goal")
+        else:
+            termination_fn = get_termination_fn("stay_close_to_goal_level_4")
     else:
         termination_fn = None
 
     if initializer is None:
         initializer = initializers.centered_init
     elif initializer == "fixed":
-        from trifinger_simulation.tasks.move_cube import Pose
-        import json
-
         goal_fp = osp.join(osp.split(__file__)[0], "goal.json")
         goal = Pose.from_json(json.load(open(goal_fp, "r"))).to_dict()
         initializer = initializers.fixed_g_init(diff, goal)
@@ -144,7 +147,6 @@ def make_env_cls(
         goal_difficulty=diff,
         initializer=initializer,
         episode_length=episode_length,
-        relative_goal=relative_goal,
         reward_fn=reward_fn,
         termination_fn=termination_fn,
         force_factor=1.0,
@@ -157,7 +159,6 @@ def make_env_cls(
 def env_fn_generator(
     diff=3,
     episode_length=500,
-    relative_goal=True,
     reward_fn=None,
     termination_fn=None,
     save_mp4=False,
@@ -168,17 +169,15 @@ def env_fn_generator(
     env_cls=None,
     flatten_goal=True,
     scale=None,
+    action_type=None,
     **env_kwargs,
 ):
     reward_fn = get_reward_fn(reward_fn)
 
     goal = None
     if initializer is None:
-        initializer = initializers.centered_init
+        initializer = initializers.centered_init(diff)
     elif initializer == "fixed":
-        from trifinger_simulation.tasks.move_cube import Pose
-        import json
-
         goal_fp = osp.join(osp.split(__file__)[0], "goal.json")
         goal = Pose.from_json(json.load(open(goal_fp, "r"))).to_dict()
         initializer = initializers.fixed_g_init(diff, goal)
@@ -191,29 +190,48 @@ def env_fn_generator(
     info_keywords = ("ori_err", "pos_err")
     if env_cls == "wrench_env":
         info_keywords = ("ori_err", "pos_err", "infeasible")
-
-    env_cls = get_env_cls(env_cls)
-
-    def env_fn():
+    if env_cls == "real_env":
+        if action_type is not None:
+            if action_type not in [
+                "torque",
+                "position",
+                "torque_and_position",
+                "position_and_torque",
+            ]:
+                raise ValueError(f"Unknown action space: {action_type}.")
+            if action_type == "torque":
+                env_kwargs["action_type"] = ActionType.TORQUE
+            elif action_type in ["torque_and_position", "position_and_torque"]:
+                env_kwargs["action_type"] = ActionType.TORQUE_AND_POSITION
+            else:
+                env_kwargs["action_type"] = ActionType.POSITION
+        env_kwargs["sim"] = True
+        if "object_frame" in env_kwargs:
+            env_kwargs.pop("object_frame")
+    else:
         # TODO (fix): hard-coding force and torque factor
         force_factor, torque_factor = scale or (1.0, 0.1)
         if residual:
             r_force_factor, r_torque_factor = force_factor, torque_factor
             force_factor, torque_factor = 1.0, 1.0
+        env_kwargs["torque_factor"] = torque_factor
+        env_kwargs["force_factor"] = force_factor
+
+    env_cls = get_env_cls(env_cls)
+
+    def env_fn():
+
         env = env_cls(
             goal,
             diff,
             initializer=initializer,
             episode_length=episode_length,
-            relative_goal=relative_goal,
             reward_fn=reward_fn,
-            force_factor=force_factor,
-            torque_factor=torque_factor,
             termination_fn=termination_fn,
             **env_kwargs,
         )
         if residual:
-            env = ResidualPDWrapper(
+            env = wrappers.ResidualPDWrapper(
                 env, force_factor=r_force_factor, torque_factor=r_torque_factor
             )
         if save_mp4:

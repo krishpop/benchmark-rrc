@@ -95,10 +95,10 @@ class PinocchioUtils:
         )
         return Ji
 
-    def get_lambda_and_g_matrix(self, finger_id, q, Jvi):
+    def get_lambda_and_g_matrix(self, finger_id, q, Jvi, grav):
         Ai = np.zeros((9, 9))
         g = np.zeros(9)
-        grav = np.array([0, 0, -9.81])
+        grav = np.array([0, 0, grav])
         order = [0, 1, 3]
         for j in range(3):
             id = (finger_id + 1) * 10 + order[j]
@@ -261,10 +261,10 @@ class PinocchioUtils:
         self,
         tip_target_positions,
         joint_angles_guess,
-        tol: float = 0.005,
+        tol: float = 0.001,
         max_itr: int = 20,
     ):
         q = joint_angles_guess
-        for i, pos in enumerate(tip_target_positions):
+        for i, pos in enumerate(tip_target_positions.reshape((3, 3))):
             q = self.inverse_kinematics_one_finger(i, pos, q, tol, max_itr)
         return q

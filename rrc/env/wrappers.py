@@ -1,17 +1,17 @@
 """Gym environment for the Real Robot Challenge Phase 1 (Simulation)."""
-import pybullet as p
-import numpy as np
-import gym
-import time
-import cv2
 import os
 import os.path as osp
-from rrc.env.cube_env import ActionType
+import time
+
+import cv2
+import gym
+import numpy as np
+import pybullet as p
 from gym import ObservationWrapper
 from gym.spaces import flatten_space
+from rrc.env.cube_env import ActionType
 from stable_baselines3.common.monitor import Monitor
-from trifinger_simulation import trifingerpro_limits
-from trifinger_simulation import camera
+from trifinger_simulation import camera, trifingerpro_limits
 
 try:
     from xvfbwrapper import Xvfb
@@ -86,8 +86,8 @@ class action_type_to:
 
     def _get_action_space(self, action_type):
         import gym
-        from trifinger_simulation import TriFingerPlatform
         from rrc.env.cube_env import ActionType
+        from trifinger_simulation import TriFingerPlatform
 
         spaces = TriFingerPlatform.spaces
         if action_type == ActionType.TORQUE:
@@ -342,7 +342,7 @@ class PyBulletClearGUIWrapper(gym.Wrapper):
         super(PyBulletClearGUIWrapper, self).__init__(env)
         self.camera_kwargs = kwargs
 
-    def reset(self, camera_kwargs=dict(), **kwargs):
+    def reset(self, camera_kwargs={}, **kwargs):
         cam_kwargs = dict(
             cameraDistance=0.6,
             cameraYaw=0,
@@ -507,8 +507,84 @@ class FlattenGoalObs(ObservationWrapper):
         n_obs = {}
         for k in self.observation_space.spaces:
             if isinstance(obs[k], dict):
-                obs_list = [obs[k][k2] for k2 in self.env.observation_space[k]]
+                obs_list = [
+                    obs[k][k2].flatten() for k2 in self.env.observation_space[k]
+                ]
                 n_obs[k] = np.concatenate(obs_list)
             else:
                 n_obs[k] = obs[k]
         return n_obs
+
+
+class PyBulletMonitor(gym.Wrapper):
+
+    _render_width = 256
+    _render_height = 192
+    _cam_dist = 0.65
+    _cam_yaw = 0.0
+    _cam_pitch = -45.0
+
+    def __init__(self, env):
+        super(PyBulletMonitor, self).__init__(env)
+        self.metadata = {"render.modes": ["rgb_array"], "video.frames_per_second": 60}
+
+    @property
+    def _pybullet_client_id(self):
+        return self.platform.simfinger._pybullet_client_id
+
+    def camera_adjust(self):
+        pass
+
+    def render(self, mode="human", close=False):
+        if mode == "human":
+            self.isRender = True
+        if self._pybullet_client_id >= 0:
+            self.camera_adjust()
+
+        if mode != "rgb_array":
+            return np.array([])
+
+        base_pos = [0, 0, 0]
+
+        if self._pybullet_client_id >= 0:
+            view_matrix = p.computeViewMatrixFromYawPitchRoll(
+                cameraTargetPosition=base_pos,
+                distance=self._cam_dist,
+                yaw=self._cam_yaw,
+                pitch=self._cam_pitch,
+                roll=0,
+                upAxisIndex=2,
+                physicsClientId=self._pybullet_client_id,
+            )
+            proj_matrix = p.computeProjectionMatrixFOV(
+                fov=60,
+                aspect=float(self._render_width) / self._render_height,
+                nearVal=0.1,
+                farVal=100.0,
+                physicsClientId=self._pybullet_client_id,
+            )
+            (_, _, px, _, _) = p.getCameraImage(
+                width=self._render_width,
+                height=self._render_height,
+                viewMatrix=view_matrix,
+                projectionMatrix=proj_matrix,
+                renderer=p.ER_BULLET_HARDWARE_OPENGL,
+                physicsClientId=self._pybullet_client_id,
+            )
+
+            p.configureDebugVisualizer(
+                p.COV_ENABLE_SINGLE_STEP_RENDERING,
+                1,
+                physicsClientId=self._pybullet_client_id,
+            )
+        else:
+            px = np.array(
+                [[[255, 255, 255, 255]] * self._render_width] * self._render_height,
+                dtype=np.uint8,
+            )
+        rgb_array = np.array(px, dtype=np.uint8)
+        rgb_array = np.reshape(
+            np.array(px), (self._render_height, self._render_width, -1)
+        )
+        rgb_array = rgb_array[:, :, :3]
+        return rgb_array
