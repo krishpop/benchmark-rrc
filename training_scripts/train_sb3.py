@@ -183,6 +183,7 @@ def train_save_model(
 def make_model(
     ep_len,
     lr,
+    n_steps,
     env=None,
     use_goal=True,
     use_sde=False,
@@ -219,6 +220,7 @@ def make_model(
     else:
         rb_kwargs = {}
     replay_buffer_class = HerReplayBuffer if her else None
+    gamma = 1 - (10 ** -np.floor(np.log10(ep_len)))
     model = SAC(
         "MultiInputPolicy",
         env,
@@ -227,12 +229,13 @@ def make_model(
         replay_buffer_kwargs=rb_kwargs,
         policy_kwargs=policy_kwargs,
         verbose=1,
-        buffer_size=int(1e6),
-        learning_starts=20000,
+        buffer_size=int(n_steps),
+        learning_starts=1000,
         learning_rate=lr,
-        gamma=0.99,
-        batch_size=256,
+        gamma=gamma,
+        batch_size=64,
         residual=residual,
+        ent_coef="auto",
         **sde_kwargs,
     )
     if load_path is not None:
@@ -278,7 +281,7 @@ def main(
         env = VecNormalize(env, **norm_env)
 
     model = make_model(
-        ep_len, lr, env, use_goal, load_path=load_path, residual=residual
+        ep_len, lr, n_steps, env, use_goal, load_path=load_path, residual=residual
     )
     model.set_random_seed(seed)
     if load_path:
@@ -357,7 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_steps", type=float, default=1e5)
     parser.add_argument("--diff", type=int, default=3, choices=[1, 2, 3, 4])
     parser.add_argument("--ep_len", type=int, default=500)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=str, default="3e-4")
     parser.add_argument("--normalize_obs", "--norm_obs", action="store_true")
     parser.add_argument("--normalize_reward", "--norm_reward", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
@@ -384,7 +387,9 @@ if __name__ == "__main__":
         norm_env = dict(norm_obs=args.normalize_obs, norm_reward=args.normalize_reward)
     if args.gravity:
         if args.gravity == "lin":
-            args.gravity = LinearSchedule(n_steps=(args.n_steps - 20000) / args.ep_len)
+            args.gravity = LinearSchedule(
+                0, -9.81, n_steps=(args.n_steps - 20000) / args.ep_len
+            )
         else:
             args.gravity = float(args.gravity)
 
@@ -397,6 +402,12 @@ if __name__ == "__main__":
         else:
             args.scale = float(args.scale)
 
+    try:
+        lr = float(args.lr)
+    except ValueError:
+        initial_lr = float(args.lr.lstrip("lin_"))
+        lr = LinearSchedule(initial_lr)
+
     run = None
     if not args.dry_run:
         run = wandb.init(project="cvxrl", name=args.name)  # sync_tensorboard=True)
@@ -407,7 +418,7 @@ if __name__ == "__main__":
         args.n_steps,
         args.diff,
         args.ep_len,
-        args.lr,
+        lr,
         norm_env,
         dry_run=args.dry_run,
         render=args.render,

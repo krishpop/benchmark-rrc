@@ -10,20 +10,20 @@ default_cam_kwargs = dict(
 
 
 class LinearSchedule:
-    def __init__(self, n_steps=100, start=0.0, end=-9.81, rounding=True):
-        self.current = start
-        self.step_size = (end - start) / n_steps
+    def __init__(self, start=0.0, end=0.0, n_steps=None):
+        self.initial_value = start
+        self.final_value = end
         self.n_steps = n_steps
         self.current_step = 0.0
-        self.rounding = rounding
 
-    def __call__(self):
-        self.current_step += 1
-        if self.current_step <= self.n_steps:
-            self.current += self.step_size
-        if self.rounding:
-            self.current = round(self.current, 4)
-        return self.current
+    def __call__(self, progress_remaining=None):
+        if progress_remaining is None:
+            progress_remaining = max(0, 1 - self.current_step / self.n_steps)
+            self.current_step += 1
+        return (
+            progress_remaining * self.initial_value
+            + (1 - progress_remaining) * self.final_value
+        )
 
 
 def render_frame(env, **cam_kwargs):
