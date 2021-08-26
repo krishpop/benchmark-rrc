@@ -139,3 +139,4 @@ dmypy.json
 **.idea/
 **wandb/
 **data/
+**output/
