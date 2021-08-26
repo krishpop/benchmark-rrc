@@ -1311,7 +1311,6 @@ class RealRobotCubeEnv(gym.GoalEnv):
                     "orientation": desired_goal[:4],
                 }
             obs["desired_goal"] = desired_goal
-            obs["action"] = info["action"]
             return self._compute_reward(p_obs, obs, info)
 
     def step(self, action):

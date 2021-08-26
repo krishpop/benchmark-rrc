@@ -6,11 +6,10 @@ easily try out new reward functions.
 
 
 import numpy as np
-
-from trifinger_simulation.tasks.move_cube import _min_height, _max_height
 from scipy import stats
-from trifinger_simulation.tasks import move_cube
 from scipy.spatial.transform import Rotation
+from trifinger_simulation.tasks import move_cube
+from trifinger_simulation.tasks.move_cube import _max_height, _min_height
 
 ###############################
 # Competition Reward Functions
@@ -52,12 +51,14 @@ def _lgsk_kernel(x, scale: float = 50.0):
 def _tip_distance_to_cube(observation):
     # calculate first reward term
     pose = observation["achieved_goal"]
-    return np.linalg.norm(observation["robot"]["tip_positions"] - pose["position"])
+    return np.linalg.norm(
+        observation["observation"]["tip_positions"] - pose["position"]
+    )
 
 
 def _action_reg(observation):
-    v = observation["robot"]["velocity"]
-    t = observation["robot"]["torque"]
+    v = observation["observation"]["velocity"]
+    t = observation["observation"]["torque"]
     velocity_reg = v.dot(v)
     torque_reg = t.dot(t)
     return 0.1 * velocity_reg + torque_reg
@@ -69,10 +70,11 @@ def _tip_slippage(previous_observation, observation):
     obj_rot = Rotation.from_quat(pose["orientation"])
     prev_obj_rot = Rotation.from_quat(prev_pose["orientation"])
     relative_tip_pos = obj_rot.apply(
-        observation["robot"]["tip_positions"] - observation["achieved_goal"]["position"]
+        observation["observation"]["tip_positions"]
+        - observation["achieved_goal"]["position"]
     )
     prev_relative_tip_pos = prev_obj_rot.apply(
-        previous_observation["robot"]["tip_positions"]
+        previous_observation["observation"]["tip_positions"]
         - previous_observation["achieved_goal"]["position"]
     )
     return -np.linalg.norm(relative_tip_pos - prev_relative_tip_pos)
@@ -147,11 +149,18 @@ def training_reward5(previous_observation, observation, info):
     return sum([_lgsk_kernel(d) for d in dist])
 
 
+def training_reward6(previous_observation, observation, info):
+    shaped_rew = training_reward(previous_observation, observation, info)
+    lgsk_rew = training_reward5(previous_observation, observation, info)
+    return lgsk_rew + shaped_rew
+
+
 train1 = training_reward1
 train2 = training_reward2
 train3 = training_reward3
 train4 = training_reward4
 train5 = training_reward5
+train6 = training_reward6
 competition = competition_reward
 
 
@@ -165,7 +174,7 @@ def gaussian_training_reward(previous_observation, observation, info):
     r = gaussian_reward(previous_observation, observation, info)
 
     # Large tip forces are around 0.5. 0.05 means no force is sensed at the tips
-    tip_force = np.sum(observation["robot"]["tip_force"])
+    tip_force = np.sum(observation["observation"]["tip_force"])
 
     # NOTE: _act_reg
     # smaller is better
