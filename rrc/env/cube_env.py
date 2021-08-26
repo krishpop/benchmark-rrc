@@ -1393,7 +1393,9 @@ class RealRobotCubeEnv(gym.GoalEnv):
         info["ori_err"] = _orientation_error(observation)
         info["pos_err"] = _position_error(observation)
         # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
-        info["p_obs"] = {k: p_obs[k] for k in ["desired_goal", "achieved_goal"]}
+        info["p_obs"] = {
+            k: p_obs[k] for k in ["desired_goal", "achieved_goal", "observation"]
+        }
         info["obs"] = {
             k: observation[k] for k in ["desired_goal", "achieved_goal", "observation"]
         }
@@ -1849,7 +1851,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             for tip in self.platform.simfinger.pybullet_tip_link_indices
         ]
         finger_contact_states = [
-            ContactResult(*x[0]) for x in finger_contact_states if len(x[0]) == 14
+            ContactResult(*x[0]) for x in finger_contact_states if x and len(x[0]) == 14
         ]
         return finger_contact_states
 
@@ -1864,13 +1866,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         self.action_space = self.robot_torque_space
         self.prev_observation, _, _, _ = super().step(self.initial_action)
         self.action_space = self.wrench_space
-        self.grasping = True
-        if self.use_traj_opt:
-            self.execute_pre_grasp()
-            self.execute_grasp()
-        else:
-            self.execute_grasp()
-        self.grasping = False
+        self.execute_grasp()
         return deepcopy(self.prev_observation)
 
     def action(self, des_wrench, step=0):
@@ -1927,6 +1923,11 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             torque, des_tip_forces = self.action(action, step)
             obs, rew, done, info = super(RobotWrenchCubeEnv, self).step(torque)
             self.update_contact_state(des_tip_forces)
+            while len(self._current_tip_force) != 3:
+                # need to regrasp
+                self.execute_grasp(pre_grasp_ngrid=5, grasp_ngrid=10)
+                self.update_contact_state(des_tip_forces)
+
         self.action_space = self.wrench_space
         return obs, rew, done, info
 
@@ -2010,7 +2011,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         self.prev_observation, _, _, _ = super(RobotWrenchCubeEnv, self).step(torque)
         return
 
-    def execute_pre_grasp(self):
+    def execute_pre_grasp(self, ngrid=6):
         # Get object positions
         obj_pose = move_cube.Pose.from_dict(self.prev_observation["achieved_goal"])
         self.cp_params = c_utils.get_lifting_cp_params(obj_pose)
@@ -2026,9 +2027,8 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         gymlogger.debug(f"ft_goal:{ft_goal}")
 
         if self.use_traj_opt:
-            nGrid = 6
             dt = 0.01  # self.time_step_s * self.frameskip
-            release_nlp = c_utils.define_static_object_opt(nGrid, dt)
+            release_nlp = c_utils.define_static_object_opt(ngrid, dt)
             ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
                 current_position, obj_pose, ft_goal, release_nlp
             )
@@ -2057,7 +2057,10 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             self.action_type = ActionType.TORQUE
             self.action_space = self.wrench_space
 
-    def execute_grasp(self):
+    def execute_grasp(self, pre_grasp_ngrid=6, grasp_ngrid=40):
+        if self.use_traj_opt:
+            self.execute_pre_grasp(pre_grasp_ngrid)
+
         FT_RADIUS = 0.0075
         # get aligned cube pose in case of noisy observation
         obj_pose = move_cube.Pose.from_dict(self.prev_observation["achieved_goal"])
@@ -2092,8 +2095,8 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         ft_goal = np.asarray(cp_wf_list).flatten()
         # ft_goal += np.array([0, 0, 0.02] * 3)
         if self.use_traj_opt:
-            nGrid, dt = 40, 0.01  # self.time_step_s * self.frameskip
-            finger_nlp = c_utils.define_static_object_opt(nGrid, dt)
+            dt = 0.01  # self.time_step_s * self.frameskip
+            finger_nlp = c_utils.define_static_object_opt(grasp_ngrid, dt)
             ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
                 current_position, obj_pose, ft_goal, finger_nlp
             )

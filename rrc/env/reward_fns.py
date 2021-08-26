@@ -155,6 +155,7 @@ def training_reward6(previous_observation, observation, info):
     return lgsk_rew + shaped_rew
 
 
+train = training_reward
 train1 = training_reward1
 train2 = training_reward2
 train3 = training_reward3
