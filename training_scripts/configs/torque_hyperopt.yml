@@ -1,0 +1,45 @@
+# command: python train_her.py --diff 3 --lr 7.3e-4 --n_steps 4e5 \  
+# --rew_fn train5 --name wrench-0g-diff3 --seed 1 
+
+name: torque_runs
+program: training_scripts/train_sb3.py
+method: random
+metric:
+    name: rollout/ep_pos_err_mean
+    goal: minimize
+early_terminate:
+    type: hyperband
+    min_iter: 1000
+parameters:
+  lr:
+    min: 1e-5
+    max: 7.3e-4
+  n_steps:
+    value: 5e5
+  rew_fn:
+    values: 
+      - 'train'
+      - 'train5'
+  init:
+    value: 'fixed_init'
+  env_cls:
+    value: real_env
+  batch_size:
+    values: [32, 64, 128, 256]
+  ent_coef:
+    values: ['auto', .01, 0.005]
+  random_eps:
+    values: [10, 20, 50]
+  tau:
+    min: 0.005
+    max: 0.02
+  her:
+    values: [True, False]
+  name:
+    value: torque_hyperopt
+  action_type:
+    value: torque
+  ep_len:
+    value: 500
+  diff:
+    value: 1

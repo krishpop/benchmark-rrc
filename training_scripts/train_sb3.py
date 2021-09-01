@@ -230,12 +230,12 @@ def make_model(
         policy_kwargs=policy_kwargs,
         verbose=1,
         buffer_size=int(n_steps),
-        learning_starts=1000,
+        learning_starts=10000,
         learning_rate=lr,
         gamma=gamma,
-        batch_size=64,
+        batch_size=256,
         residual=residual,
-        ent_coef="auto",
+        # ent_coef="auto",
         **sde_kwargs,
     )
     if load_path is not None:
@@ -250,6 +250,7 @@ def main(
     diff,
     ep_len,
     lr,
+    her=True,
     norm_env={},
     dry_run=False,
     render=False,
@@ -281,7 +282,14 @@ def main(
         env = VecNormalize(env, **norm_env)
 
     model = make_model(
-        ep_len, lr, n_steps, env, use_goal, load_path=load_path, residual=residual
+        ep_len,
+        lr,
+        n_steps,
+        env,
+        use_goal,
+        load_path=load_path,
+        residual=residual,
+        her=her,
     )
     model.set_random_seed(seed)
     if load_path:
@@ -353,33 +361,61 @@ def main(
         env.save(stats_path)
 
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
+
+def add_bool_arg(parser, name, default=False):
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--" + name, type=str2bool, dest=name, const=True, nargs="?")
+    group.add_argument("--no-" + name, dest=name, action="store_false")
+    parser.set_defaults(**{name: default})
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
+
+    # Training args
     parser.add_argument("--n_steps", type=float, default=1e5)
-    parser.add_argument("--diff", type=int, default=3, choices=[1, 2, 3, 4])
-    parser.add_argument("--ep_len", type=int, default=500)
     parser.add_argument("--lr", type=str, default="3e-4")
     parser.add_argument("--normalize_obs", "--norm_obs", action="store_true")
     parser.add_argument("--normalize_reward", "--norm_reward", action="store_true")
-    parser.add_argument("--dry_run", action="store_true")
+
+    # Model args
+    parser.add_argument("--sde", action="store_true")
+    parser.add_argument("--residual", action="store_true")
+    parser.add_argument("--load_path", type=str)
+    add_bool_arg(parser, "her", default=True)
+
+    # Env args
+    parser.add_argument("--diff", type=int, default=3, choices=[1, 2, 3, 4])
+    parser.add_argument("--ep_len", type=int, default=2500)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--rew_fn", default="train5", type=str)
     parser.add_argument("--no_goal", action="store_true")
-    parser.add_argument("--sde", action="store_true")
-    parser.add_argument("--residual", action="store_true")
     parser.add_argument("--contact", action="store_true")
     parser.add_argument("--env_cls", type=str)
-    parser.add_argument("--name", type=str)
     parser.add_argument("--term_fn", type=str)
     parser.add_argument("--init", default="centered_init", type=str)
-    parser.add_argument("--load_path", type=str)
     parser.add_argument("--gravity", default="-9.81", type=str)
     parser.add_argument("--scale", type=str)
-    parser.add_argument("--seed", type=int)
     parser.add_argument("--object_frame", "--of", action="store_true")
     parser.add_argument("--action_type", default=None)
+
+    # Experiment args
+    parser.add_argument("--name", type=str)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--dry_run", action="store_true")
+
     args = parser.parse_args()
 
     norm_env = {}
@@ -419,7 +455,8 @@ if __name__ == "__main__":
         args.diff,
         args.ep_len,
         lr,
-        norm_env,
+        her=args.her,
+        norm_env=norm_env,
         dry_run=args.dry_run,
         render=args.render,
         reward_fn=args.rew_fn,
