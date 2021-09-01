@@ -209,6 +209,10 @@ def env_fn_generator(
         env_kwargs["sim"] = True
         if "object_frame" in env_kwargs:
             env_kwargs.pop("object_frame")
+        if scale is not None:
+            if isinstance(scale, list):
+                scale = np.asarray(scale)
+            env_kwargs["action_scale"] = scale
     else:
         # TODO (fix): hard-coding force and torque factor
         if scale is not None and len(scale) == 6:
