@@ -149,19 +149,12 @@ def training_reward5(previous_observation, observation, info):
     return sum([_lgsk_kernel(d) for d in dist])
 
 
-def training_reward6(previous_observation, observation, info):
-    shaped_rew = training_reward(previous_observation, observation, info)
-    lgsk_rew = training_reward5(previous_observation, observation, info)
-    return lgsk_rew + shaped_rew
-
-
 train = training_reward
 train1 = training_reward1
 train2 = training_reward2
 train3 = training_reward3
 train4 = training_reward4
 train5 = training_reward5
-train6 = training_reward6
 competition = competition_reward
 
 

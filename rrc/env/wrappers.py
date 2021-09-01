@@ -443,10 +443,12 @@ class ResidualPDWrapper(gym.Wrapper):
         Kp=np.eye(3) * np.array([100, 100, 1]),
         Kd=1,
         include_ac=False,
-        force_factor=0.1,
-        torque_factor=0.25,
+        force_factor=0.5,
+        torque_factor=0.1,
     ):
         super(ResidualPDWrapper, self).__init__(env)
+        if not isinstance(Kp, np.ndarray) or Kp.shape != (3, 3):
+            Kp = np.eye(3) * Kp
         self.Kp = Kp
         self.Kd = Kd
         self._obs = self._prev_obs = None
@@ -470,8 +472,10 @@ class ResidualPDWrapper(gym.Wrapper):
     def step(self, action):
         action[:3] *= self.force_factor
         action[3:] *= self.torque_factor
+        # TODO: restore residual actions
         pd_action = self.pd_action(self._obs, self._prev_obs)
-        ac = action + pd_action
+        # ac = action + pd_action
+        ac = np.clip(pd_action, -1, 1)
         self._prev_obs = self._obs
         obs, r, d, i = self.env.step(ac)
         self._obs = obs
@@ -480,17 +484,21 @@ class ResidualPDWrapper(gym.Wrapper):
         return obs, r, d, i
 
     def pd_action(self, observation, prev_observation):
-        if observation is None:
+        if prev_observation is None:
             return np.zeros(6)
         if observation["observation"].get("pd_action") is not None:
             return observation["observation"]["pd_action"]
-        err = observation["observation"]["position"]
+        err = (
+            -observation["desired_goal"]["position"]
+            + observation["achieved_goal"]["position"]
+        )
+
         u = -self.Kp @ err
         if prev_observation is None:
             return np.concatenate([u, np.zeros(3)], axis=-1)
-        err_diff = (
-            observation["observation"]["position"]
-            - prev_observation["observation"]["position"]
+        err_diff = err - (
+            -prev_observation["desired_goal"]["position"]
+            + prev_observation["achieved_goal"]["position"]
         )
         u -= self.Kd * err_diff / self.env.time_step_s
         return np.concatenate([u, np.zeros(3)], axis=-1)

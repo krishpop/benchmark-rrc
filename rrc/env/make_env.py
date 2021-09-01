@@ -2,6 +2,7 @@ import functools
 import json
 import os.path as osp
 
+import numpy as np
 import rrc.env.wrappers as wrappers
 from gym.wrappers import Monitor
 from rrc.env import cube_env, initializers
@@ -188,8 +189,8 @@ def env_fn_generator(
         termination_fn = get_termination_fn(termination_fn)
 
     info_keywords = ("ori_err", "pos_err")
-    if env_cls == "wrench_env":
-        info_keywords = ("ori_err", "pos_err", "infeasible")
+    if env_cls in ["real_env", "wrench_robot_env"]:
+        info_keywords = ("ori_err", "pos_err", "corner_err", "tot_tip_pos_err")
     if env_cls == "real_env":
         if action_type is not None:
             if action_type not in [
@@ -210,7 +211,10 @@ def env_fn_generator(
             env_kwargs.pop("object_frame")
     else:
         # TODO (fix): hard-coding force and torque factor
-        force_factor, torque_factor = scale or (1.0, 0.1)
+        if scale is not None and len(scale) == 6:
+            force_factor, torque_factor = np.asarray(scale[:3]), np.asarray(scale[3:])
+        else:
+            force_factor, torque_factor = scale or (0.5, 0.1)
         if residual:
             r_force_factor, r_torque_factor = force_factor, torque_factor
             force_factor, torque_factor = 1.0, 1.0
