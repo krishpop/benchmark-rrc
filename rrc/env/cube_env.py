@@ -1145,7 +1145,8 @@ class RealRobotCubeEnv(gym.GoalEnv):
         path: str = None,
         debug: bool = False,
         action_scale: Union[float, np.ndarray] = None,
-        contact_timeout: int = 100,
+        contact_timeout: int = 500,
+        min_tip_dist: float = 0.11,
     ):
         """Initialize.
 
@@ -1170,6 +1171,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             debug (bool): print debug lines
             action_scale (Union[float, np.ndarray]): constant factor to scale actions
             contact_timeout (int): steps until episode is terminated early
+            min_tip_dist (float): minimum tip distance to reach to aviod timeout
         """
         # Basic initialization
         # ====================
@@ -1203,10 +1205,13 @@ class RealRobotCubeEnv(gym.GoalEnv):
         self.frameskip = frameskip
         self.time_step_s = time_step_s
         self.contact_timeout = contact_timeout
+        self._min_tip_dist = self._last_tip_dist = min_tip_dist
+        self._tip_dist_buffer = deque(maxlen=10)
 
         # will be initialized in reset()
         self.real_platform = None
         self.platform = None
+        self._pybullet_client_id = -1
         self.simulation = sim
         self.visualization = visualization
         self.episode_length = episode_length
@@ -1262,7 +1267,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             else:
                 self.action_space = gym.spaces.Box(
                     low=robot_torque_space.low * action_scale,
-                    high=robot_torque_space * action_scale,
+                    high=robot_torque_space.high * action_scale,
                 )
 
             self.initial_action = trifingerpro_limits.robot_torque.default
@@ -1272,7 +1277,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             else:
                 self.action_space = gym.spaces.Box(
                     low=robot_position_space.low * action_scale,
-                    high=robot_position_space * action_scale,
+                    high=robot_position_space.high * action_scale,
                 )
             self.initial_action = (
                 INIT_JOINT_CONF  # trifingerpro_limits.robot_position.default
@@ -1316,6 +1321,15 @@ class RealRobotCubeEnv(gym.GoalEnv):
         self.pinocchio_utils = PinocchioUtils()
         self.prev_observation = None
         self._prev_step_report = 0
+
+    @property
+    def min_tip_dist(self):
+        return self._min_tip_dist
+
+    @min_tip_dist.setter
+    def min_tip_dist(self, x):
+        if x >= 0.07:  # min_tip_dist limit
+            self._min_tip_dist = x
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         if not isinstance(info, dict):
@@ -1408,10 +1422,11 @@ class RealRobotCubeEnv(gym.GoalEnv):
             if self.step_count >= self.episode_length:
                 break
 
-        if _tip_distance_to_cube(observation) <= 0.08:
-            self.steps_since_contact = self.step_count
-
         info = self.info.copy()
+        info = self.get_info_keys(info, observation, p_obs)
+
+        if self._last_tip_dist <= self._min_tip_dist:
+            self.steps_since_contact = self.step_count
         is_done = self.step_count >= self.episode_length
         if (self.step_count - self.steps_since_contact) >= self.contact_timeout:
             is_done = True
@@ -1424,8 +1439,6 @@ class RealRobotCubeEnv(gym.GoalEnv):
             reward += term_bonus * self._termination_fn(observation)
         else:
             info["is_success"] = pos_and_rot_close_to_goal(observation)
-
-        info = self.get_info_keys(info, observation, p_obs)
 
         # report current step_count
         if self.step_count - self._prev_step_report > 200:
@@ -1460,6 +1473,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             axis=1,
         )
         info["tot_tip_pos_err"] = _tip_distance_to_cube(obs)
+        self._last_tip_dist = np.mean(info["tip_pos_err"])
 
         # TODO (cleanup): Skipping keys to avoid storing unnecessary keys in RB
         info["p_obs"] = {
@@ -1489,6 +1503,16 @@ class RealRobotCubeEnv(gym.GoalEnv):
             p.resetDebugVisualizerCamera(
                 **cam_kwargs, physicsClientId=self._pybullet_client_id
             )
+            self._tip_dist_buffer.append(self._last_tip_dist)
+            if (
+                len(self._tip_dist_buffer) == 10
+                and np.mean(self._tip_dist_buffer) < self.min_tip_dist
+            ):
+                gymlogger.debug(
+                    "Changing minimum tip distance to: %1.3f", self.min_tip_dist
+                )
+                self.min_tip_dist -= 0.01
+                self._tip_dist_buffer.clear()
         else:
             self._reset_platform_frontend()
             self._reset_direct_simulation()

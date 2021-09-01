@@ -182,7 +182,7 @@ def env_fn_generator(
         goal_fp = osp.join(osp.split(__file__)[0], "goal.json")
         goal = Pose.from_json(json.load(open(goal_fp, "r"))).to_dict()
         initializer = initializers.fixed_g_init(diff, goal)
-    else:
+    elif isinstance(initializer, str):
         initializer = get_initializer(initializer)(diff)
 
     if termination_fn is not None:
