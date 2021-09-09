@@ -100,6 +100,7 @@ class CubeEnv(gym.GoalEnv):
         torque_factor: float = 0.25,
         clip_action: bool = True,
         gravity: Union[float, Callable[[], int]] = -9.81,
+        path: str = None,
         debug: bool = False,
     ):
         """Initialize.
@@ -137,6 +138,7 @@ class CubeEnv(gym.GoalEnv):
         if gravity is None:
             gravity = -9.81
         self._gravity = gravity
+        self.path = path
         self.debug = debug
         if debug:
             gymlogger.set_level(10)
@@ -589,6 +591,7 @@ class ContactForceCubeEnv(CubeEnv):
         gravity: Union[float, Callable[[], int]] = -9.81,
         reset_contacts: bool = False,
         tip_wf: bool = True,
+        path: str = None,
         debug: bool = True,
     ):
         super(ContactForceCubeEnv, self).__init__(
@@ -607,6 +610,7 @@ class ContactForceCubeEnv(CubeEnv):
             torque_factor,
             clip_action,
             gravity,
+            path,
             debug,
         )
 
@@ -873,6 +877,7 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         gravity: Union[float, Callable[[], int]] = -9.81,
         reset_contacts: bool = False,
         tip_wf: bool = True,
+        path: str = None,
         debug: bool = False,
         cone_approx: bool = False,
         use_relaxed: bool = False,
@@ -896,6 +901,7 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
             gravity,
             reset_contacts,
             tip_wf,
+            path,
             debug,
         )
         self.cone_approx = cone_approx
@@ -947,8 +953,8 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         r = rew or r
         i["infeasible"] = self.infeasible
         o["observation"]["action"] = action
-        if d:
-            np.save("forces", np.asarray(self._forces))
+        if d and self.debug and self.path:
+            np.save(osp.join(self.path, "forces"), np.asarray(self._forces))
         return o, r, d, i
 
     def get_obj_pose(self):
@@ -1928,9 +1934,6 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
 
     def visualize_forces(self, cp_pos_list, ft_force_list):
         if not self.cp_force_lines or len(self.cp_force_lines) != len(cp_pos_list):
-            import pdb
-
-            pdb.set_trace()
             self.cp_force_lines = [
                 p.addUserDebugLine(
                     pos,
@@ -2057,7 +2060,10 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             torque, des_tip_forces = self.action(action, step)
             obs, rew, done, info = super(RobotWrenchCubeEnv, self).step(torque)
             self.update_contact_state(des_tip_forces)
-            self.visualize_forces(self._current_contact_pos, self._current_tip_force)
+            if self.debug and self.visualization:
+                self.visualize_forces(
+                    self._current_contact_pos, self._current_tip_force
+                )
             if not done and len(self._current_tip_force) != 3:
                 # need to regrasp
                 gymlogger.debug("~~~~~~Executing Re-grasp~~~~~~")
