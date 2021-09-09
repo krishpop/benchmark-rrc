@@ -924,6 +924,7 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
 
     def reset(self):
         self.infeasible = 0
+        self._forces = []
         return super(ContactForceWrenchCubeEnv, self).reset()
 
     def step(self, action):
@@ -934,6 +935,7 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         if not self.action_space.contains(action):
             raise ValueError("Given action is not contained in the action space.")
         forces = self.get_balance_contact_forces(action)
+        self._forces.append(forces)
         if forces is None:
             forces = np.zeros(9)
             rew = self.INFEASIBLE_PENALTY
@@ -945,6 +947,8 @@ class ContactForceWrenchCubeEnv(ContactForceCubeEnv):
         r = rew or r
         i["infeasible"] = self.infeasible
         o["observation"]["action"] = action
+        if d:
+            np.save("forces", np.asarray(self._forces))
         return o, r, d, i
 
     def get_obj_pose(self):
@@ -1145,7 +1149,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
         path: str = None,
         debug: bool = False,
         action_scale: Union[float, np.ndarray] = None,
-        contact_timeout: int = 500,
+        contact_timeout: int = 50,
         min_tip_dist: float = 0.11,
     ):
         """Initialize.
@@ -1504,15 +1508,6 @@ class RealRobotCubeEnv(gym.GoalEnv):
                 **cam_kwargs, physicsClientId=self._pybullet_client_id
             )
             self._tip_dist_buffer.append(self._last_tip_dist)
-            if (
-                len(self._tip_dist_buffer) == 10
-                and np.mean(self._tip_dist_buffer) < self.min_tip_dist
-            ):
-                gymlogger.debug(
-                    "Changing minimum tip distance to: %1.3f", self.min_tip_dist
-                )
-                self.min_tip_dist -= 0.01
-                self._tip_dist_buffer.clear()
         else:
             self._reset_platform_frontend()
             self._reset_direct_simulation()
@@ -1526,7 +1521,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             physicsClientId=self.platform.simfinger._pybullet_client_id,
         )
 
-        self.steps_since_contact = 0.0
+        self.maybe_update_tip_dist()
         self.step_count = 0
 
         # need to already do one step to get initial observation
@@ -1535,6 +1530,20 @@ class RealRobotCubeEnv(gym.GoalEnv):
         if self.path is not None:
             self.set_reach_start()
         return self.prev_observation
+
+    def maybe_update_tip_dist(self):
+        if (
+            len(self._tip_dist_buffer) == 10
+            and np.mean(self._tip_dist_buffer) < self.min_tip_dist
+        ):
+            gymlogger.debug(
+                "Changing minimum tip distance to: %1.3f", self.min_tip_dist
+            )
+            self.min_tip_dist -= 0.01
+            self._tip_dist_buffer.clear()
+
+        self.steps_since_contact = 0
+        return
 
     def _reset_platform_frontend(self):
         """Reset the platform frontend."""
@@ -1919,6 +1928,9 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
 
     def visualize_forces(self, cp_pos_list, ft_force_list):
         if not self.cp_force_lines or len(self.cp_force_lines) != len(cp_pos_list):
+            import pdb
+
+            pdb.set_trace()
             self.cp_force_lines = [
                 p.addUserDebugLine(
                     pos,
@@ -1962,6 +1974,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         #    self.platform.simfinger.finger_urdf_path,
         #    self.platform.simfinger.tip_link_names,
         # )
+        self.maybe_update_tip_dist()
         self.step_count = 0
         self._current_tip_force = None
         self._integral = 0
@@ -1994,7 +2007,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         )
         return torque, tip_forces_wf
 
-    def compute_tip_forces(self, wrench):
+    def compute_tip_forces(self, wrench, use_actual_cp=False):
         obj_pose = np.concatenate(
             [
                 self.prev_observation["achieved_goal"]["position"],
@@ -2086,7 +2099,7 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             obs_tip_dir.append(contact_dir)
             obs_tip_pos.append(contact_pos)
 
-        self._current_tip_force = obs_tip_forces = self.rotate_obs_force(
+        self._current_tip_force, _ = obs_tip_forces, rotations = self.rotate_obs_force(
             obs_tip_forces, obs_tip_dir
         )
         self._current_contact_pos = [x[1] for x in obs_tip_pos]
@@ -2102,12 +2115,14 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
 
     def rotate_obs_force(self, obs_force, tip_dir):
         forces = []
+        tip_rotations = []
         for f, td in zip(obs_force, tip_dir):
             v, w = td
             u = np.cross(v, w)
             R = np.vstack([u, v, w]).T
+            tip_rotations.append(Rotation.from_matrix(R).as_matrix())
             forces.append(-Rotation.from_matrix(R).as_matrix() @ f)
-        return forces
+        return forces, tip_rotations
 
     def execute_simple_traj(self, t, q, dq):
         KP = [200, 200, 400, 200, 200, 400, 200, 200, 400]
@@ -2447,12 +2462,21 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
             balance_force = None
         return balance_force
 
-    def get_balance_contact_forces(self, des_wrench, obj_pose=None):
+    def get_balance_contact_forces(
+        self, des_wrench, obj_pose=None, use_actual_cp=False
+    ):
         if obj_pose is None:
             obj_pose = self.get_obj_pose()
 
-        cp_list = self.get_cp_of_list(self.cp_params)
-
+        if not use_actual_cp:
+            cp_list = self.get_cp_of_list(self.cp_params)
+        else:
+            cp_list = []
+            R = Rotation.from_quat(obj_pose.orientation)
+            for p in self._current_contact_pos:
+                cp_of = c_utils.get_of_from_wf(p, obj_pose)
+                tip_dri
+                cp_list.append(ContactPoint(cp_of, R @ tip_dir))
         # Get grasp matrix
         G = self.get_grasp_matrix(cp_list, obj_pose)
 

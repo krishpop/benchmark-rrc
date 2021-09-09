@@ -149,12 +149,20 @@ def training_reward5(previous_observation, observation, info):
     return sum([_lgsk_kernel(d) for d in dist])
 
 
+def corner_shaped_reward(previous_observation, observation, info):
+    corner_rew = training_reward5(previous_observation, observation, info)
+    _tip_dist = _tip_distance_to_cube(observation)
+    tip_dist = stats.norm.pdf(_tip_dist * (1 / 0.08))
+    return tip_dist + corner_rew
+
+
 train = training_reward
 train1 = training_reward1
 train2 = training_reward2
 train3 = training_reward3
 train4 = training_reward4
 train5 = training_reward5
+corner_shaped = corner_shaped_reward
 competition = competition_reward
 
 
