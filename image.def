@@ -1,6 +1,6 @@
 # Specify the name of the base image below
 Bootstrap: localimage
-From: ./realrobotchallenge_phase2.sif
+From: ./rrc.sif
 
 %setup
 # cp setup.py package.xml ${SINGULARITY_ROOTFS}/

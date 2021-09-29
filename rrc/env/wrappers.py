@@ -9,9 +9,12 @@ import numpy as np
 import pybullet as p
 from gym import ObservationWrapper
 from gym.spaces import flatten_space
-from rrc.env.cube_env import ActionType
+from rrc.env.cube_env import Action, ActionType
+from rrc.env.env_utils import PolicyMode
+from scipy.spatial.transform import Rotation
 from stable_baselines3.common.monitor import Monitor
-from trifinger_simulation import camera, trifingerpro_limits
+from trifinger_simulation import TriFingerPlatform, camera, trifingerpro_limits
+from trifinger_simulation.tasks import move_cube
 
 try:
     from xvfbwrapper import Xvfb
@@ -85,10 +88,6 @@ class action_type_to:
             env.action_type = self.orig_action_types[ind]
 
     def _get_action_space(self, action_type):
-        import gym
-        from rrc.env.cube_env import ActionType
-        from trifinger_simulation import TriFingerPlatform
-
         spaces = TriFingerPlatform.spaces
         if action_type == ActionType.TORQUE:
             action_space = spaces.robot_torque.gym
@@ -596,3 +595,256 @@ class PyBulletMonitor(gym.Wrapper):
         )
         rgb_array = rgb_array[:, :, :3]
         return rgb_array
+
+
+class HierarchicalPolicyWrapper(ObservationWrapper):
+    def __init__(self, env, policy):
+        assert isinstance(
+            env.unwrapped, cube_env.RealRobotCubeEnv
+        ), "env expects type CubeEnv or RealRobotCubeEnv"
+        self.env = env
+        self.reward_range = self.env.reward_range
+        # set observation_space and action_space below
+        spaces = TriFingerPlatform.spaces
+        self._action_space = gym.spaces.Dict(
+            {"torque": spaces.robot_torque.gym, "position": spaces.robot_position.gym}
+        )
+        self._last_action = np.zeros(9)
+        self.set_policy(policy)
+        self._platform = None
+
+    @property
+    def impedance_control_mode(self):
+        return self.mode == PolicyMode.IMPEDANCE or (
+            self.mode == PolicyMode.RL_PUSH and self.rl_observation_space is None
+        )
+
+    @property
+    def action_space(self):
+        if self.impedance_control_mode:
+            return self._action_space["torque"]
+        else:
+            return self.wrapped_env.action_space
+
+    @property
+    def action_type(self):
+        if self.impedance_control_mode:
+            return ActionType.TORQUE
+        else:
+            return ActionType.POSITION
+
+    @property
+    def mode(self):
+        assert self.policy, "Need to first call self.set_policy() to access mode"
+        return self.policy.mode
+
+    @property
+    def frameskip(self):
+        if self.mode == PolicyMode.RL_PUSH:
+            return self.policy.rl_frameskip
+        return 4
+
+    @property
+    def step_count(self):
+        return self.env.step_count
+
+    @step_count.setter
+    def step_count(self, v):
+        self.env.step_count = v
+
+    def set_policy(self, policy):
+        self.policy = policy
+        if policy:
+            self.rl_observation_names = policy.observation_names
+            self.rl_observation_space = policy.rl_observation_space
+            obs_dict = {"impedance": self.env.observation_space}
+            if self.rl_observation_space is not None:
+                obs_dict["rl"] = self.rl_observation_space
+            self.observation_space = gym.spaces.Dict(obs_dict)
+
+    def observation(self, observation):
+        obs_dict = {"impedance": observation}
+        if "rl" in self.observation_space.spaces:
+            observation_rl = self.process_observation_rl(observation)
+            obs_dict["rl"] = observation_rl
+        return obs_dict
+
+    def get_goal_object_ori(self, obs):
+        val = obs["desired_goal"]["orientation"]
+        goal_rot = Rotation.from_quat(val)
+        actual_rot = Rotation.from_quat(np.array([0, 0, 0, 1]))
+        y_axis = [0, 1, 0]
+        actual_vector = actual_rot.apply(y_axis)
+        goal_vector = goal_rot.apply(y_axis)
+        N = np.array([0, 0, 1])
+        proj = goal_vector - goal_vector.dot(N) * N
+        proj = proj / np.linalg.norm(proj)
+        ori_error = np.arccos(proj.dot(actual_vector))
+        xyz = np.zeros(3)
+        xyz[2] = ori_error
+        val = Rotation.from_euler("xyz", xyz).as_quat()
+        return val
+
+    def process_observation_rl(self, obs, return_dict=False):
+        t = self.step_count
+        obs_dict = {}
+        cpu = self.policy.impedance_controller.custom_pinocchio_utils
+        for on in self.rl_observation_names:
+            if on == "robot_position":
+                val = obs["observation"]["position"]
+            elif on == "robot_velocity":
+                val = obs["observation"]["velocity"]
+            elif on == "robot_tip_positions":
+                val = cpu.forward_kinematics(obs["observation"]["position"]).flatten()
+            elif on == "object_position":
+                val = obs["achieved_goal"]["position"]
+            elif on == "object_orientation":
+                actual_rot = Rotation.from_quat(obs["achieved_goal"]["orientation"])
+                xyz = actual_rot.as_euler("xyz")
+                xyz[:2] = 0.0
+                val = Rotation.from_euler("xyz", xyz).as_quat()
+                val = obs["achieved_goal"]["orientation"]
+            elif on == "goal_object_position":
+                val = 0 * np.asarray(obs["desired_goal"]["position"])
+            elif on == "goal_object_orientation":
+                # disregard x and y axis rotation for goal_orientation
+                val = self.get_goal_object_ori(obs)
+            elif on == "relative_goal_object_position":
+                val = 0.0 * np.asarray(obs["desired_goal"]["position"]) - np.asarray(
+                    obs["achieved_goal"]["position"]
+                )
+            elif on == "relative_goal_object_orientation":
+                goal_rot = Rotation.from_quat(self.get_goal_object_ori(obs))
+                actual_rot = Rotation.from_quat(obs_dict["object_orientation"])
+                if self.policy.rl_env.use_quat:
+                    val = (goal_rot * actual_rot.inv()).as_quat()
+                else:
+                    val = get_theta_z_wf(goal_rot, actual_rot)
+            elif on == "action":
+                val = self._last_action
+                if isinstance(val, dict):
+                    val = val["torque"]
+            obs_dict[on] = np.asarray(val, dtype="float64").flatten()
+        if return_dict:
+            return obs_dict
+
+        self._prev_obs = obs_dict
+        obs = np.concatenate([obs_dict[k] for k in self.rl_observation_names])
+        return obs
+
+    def reset(self, **platform_kwargs):
+        self.resetting = True
+        if self._platform is None:
+            initial_object_pose = move_cube.sample_goal(-1)
+            self._platform = trifinger_simulation.TriFingerPlatform(
+                visualization=False,
+                initial_object_pose=initial_object_pose,
+            )
+        obs = super(HierarchicalPolicyWrapper, self).reset(**platform_kwargs)
+        initial_object_pose = move_cube.Pose.from_dict(
+            obs["impedance"]["achieved_goal"]
+        )
+        # initial_object_pose = move_cube.sample_goal(difficulty=-1)
+        self.policy.reset_policy(obs["impedance"], self._platform)
+        self._prev_action = np.zeros(9)
+        self.resetting = False
+        return obs
+
+    def _step(self, action):
+        if self.unwrapped.platform is None:
+            raise RuntimeError("Call `reset()` before starting to step.")
+
+        if not self.action_space.contains(action):
+            raise ValueError("Given action is not contained in the action space.")
+
+        num_steps = self.frameskip
+
+        # ensure episode length is not exceeded due to frameskip
+        step_count_after = self.step_count + num_steps
+        if step_count_after > self.episode_length:
+            excess = step_count_after - self.episode_length
+            num_steps = max(1, num_steps - excess)
+
+        reward = 0.0
+        for _ in range(num_steps):
+            # send action to robot
+            robot_action = self._gym_action_to_robot_action(action)
+            self.step_count = t = self.unwrapped.platform.append_desired_action(
+                robot_action
+            )
+
+            # Use observations of step t + 1 to follow what would be expected
+            # in a typical gym environment.  Note that on the real robot, this
+            # will not be possible
+            if osp.exists("/output"):
+                observation = self.unwrapped._create_observation(t, action)
+            else:
+                observation = self.unwrapped._create_observation(t + 1, action)
+
+            reward += self.unwrapped.compute_reward(
+                observation["achieved_goal"],
+                observation["desired_goal"],
+                self.unwrapped.info,
+            )
+
+            if self.step_count >= self.episode_length:
+                break
+
+        is_done = self.step_count == self.episode_length
+        info = self.env.info
+        info["num_steps"] = self.step_count
+        return observation, reward, is_done, info
+
+    def _gym_action_to_robot_action(self, gym_action):
+        if self.action_type == ActionType.TORQUE:
+            robot_action = Action(torque=gym_action, position=np.repeat(np.nan, 9))
+        elif self.action_type == ActionType.POSITION:
+            robot_action = Action(position=gym_action, torque=np.zeros(9))
+        else:
+            raise ValueError("Invalid action_type")
+
+        return robot_action
+
+    def scale_action(self, action, wrapped_env):
+        obs = self._prev_obs
+        poskey, velkey = "robot_position", "robot_velocity"
+        current_position, _ = obs[poskey], obs[velkey]
+        if wrapped_env.relative:
+            goal_position = current_position + 0.8 * wrapped_env.scale * action
+            pos_low, pos_high = (
+                wrapped_env.env.action_space.low,
+                wrapped_env.env.action_space.high,
+            )
+        else:
+            pos_low, pos_high = (
+                wrapped_env.spaces.robot_position.low,
+                wrapped_env.spaces.robot_position.high,
+            )
+            pos_low = np.max([current_position - wrapped_env.scale, pos_low], axis=0)
+            pos_high = np.min([current_position + wrapped_env.scale, pos_high], axis=0)
+            goal_position = action
+        action = np.clip(goal_position, pos_low, pos_high)
+        self._clipped_action = np.abs(action - goal_position)
+        return action
+
+    def step(self, action):
+        # RealRobotCubeEnv handles gym_action_to_robot_action
+        # print(self.mode)
+        self._last_action = action
+        self.unwrapped.frameskip = self.frameskip
+
+        obs, r, d, i = self._step(action)
+        obs = self.observation(obs)
+        return obs, r, d, i
+
+    def get_goal_object_pose(self, observation):
+        goal_pose = self.unwrapped.goal
+        goal_pose = move_cube.Pose.from_dict(goal_pose)
+        if not isinstance(observation, dict):
+            observation = self.unflatten_observation(observation)
+        pos, ori = (
+            observation["object_position"],
+            observation["object_orientation"],
+        )
+        object_pose = move_cube.Pose(position=pos, orientation=ori)
+        return goal_pose, object_pose

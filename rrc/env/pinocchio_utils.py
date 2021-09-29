@@ -98,7 +98,7 @@ class PinocchioUtils:
     def get_lambda_and_g_matrix(self, finger_id, q, Jvi, grav):
         Ai = np.zeros((9, 9))
         g = np.zeros(9)
-        grav = np.array([0, 0, grav])
+        grav = np.array([0, 0, -9.81])
         order = [0, 1, 3]
         for j in range(3):
             id = (finger_id + 1) * 10 + order[j]
@@ -220,9 +220,7 @@ class PinocchioUtils:
         Jinv = np.linalg.pinv(Ji)
         return Jinv.dot(xdes - xcurrent)
 
-    def inverse_kinematics_one_finger(
-        self, finger_id, xdes, q0, tol=0.001, max_iter=20
-    ):
+    def inverse_kinematics(self, finger_id, xdes, q0, tol=0.001, max_iter=20):
         """
         Compute the joint positions which approximately result in a given
         end effector position.
@@ -257,7 +255,7 @@ class PinocchioUtils:
             return None
         return q
 
-    def inverse_kinematics(
+    def inverse_kinematics_three_fingers(
         self,
         tip_target_positions,
         joint_angles_guess,
@@ -266,5 +264,5 @@ class PinocchioUtils:
     ):
         q = joint_angles_guess
         for i, pos in enumerate(tip_target_positions.reshape((3, 3))):
-            q = self.inverse_kinematics_one_finger(i, pos, q, tol, max_itr)
+            q = self.inverse_kinematics(i, pos, q, tol, max_itr)
         return q

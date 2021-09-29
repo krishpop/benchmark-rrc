@@ -14,7 +14,7 @@ def make_training_env(nenv, state_machine, goal_difficulty, action_space,
                       reward_fn=None, termination_fn=None, initializer=None,
                       episode_length=100000, monitor=False, seed=0,
                       domain_randomization=False, norm_observations=False,
-                      max_torque=0.1):
+                      max_torque=0.1, path=None):
 
     # dummy goal dict
     goal = move_cube.sample_goal(goal_difficulty)
@@ -39,6 +39,7 @@ def make_training_env(nenv, state_machine, goal_difficulty, action_space,
                 episode_length=10*episode_length,  # make this long enough to ensure that we have "episode_length" steps in the residual_state.
                 rank=rank,
                 monitor=monitor,
+                path=path
             )
             if domain_randomization:
                 env = RandomizedEnvWrapper(env)

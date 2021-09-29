@@ -60,6 +60,7 @@ def _load_env_and_policy(logdir, t=None):
         "make_training_env.sim=True",
         "make_training_env.visualization=True",
         "make_training_env.monitor=True",
+        "make_training_env.path='{}'".format(logdir),
     ]
 
     config = os.path.join(logdir, 'config.gin')

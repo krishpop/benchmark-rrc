@@ -8,12 +8,13 @@ from gym.wrappers import Monitor
 from rrc.env import cube_env, initializers
 from trifinger_simulation.tasks.move_cube import Pose
 
-from .cube_env import ActionType, RealRobotCubeEnv
+from .cube_env import ActionType, RobotCubeEnv
+from .cube_env_real import RealRobotCubeEnv
 
 
 def get_env_cls(name):
     if name is None:
-        return cube_env.CubeEnv
+        return cube_env.RobotCubeEnv
     if hasattr(cube_env, name):
         return getattr(cube_env, name)
     else:
@@ -69,6 +70,7 @@ def make_env(
     rank=0,
     monitor=False,
     path=None,
+    real=False,
 ):
     reward_fn = get_reward_fn(reward_fn)
     initializer = get_initializer(initializer)(goal_difficulty)
@@ -86,19 +88,35 @@ def make_env(
         action_type = ActionType.TORQUE_AND_POSITION
     else:
         action_type = ActionType.POSITION
-    env = RealRobotCubeEnv(
-        cube_goal_pose,
-        goal_difficulty,
-        action_type=action_type,
-        frameskip=frameskip,
-        sim=sim,
-        visualization=visualization,
-        reward_fn=reward_fn,
-        termination_fn=termination_fn,
-        initializer=initializer,
-        episode_length=episode_length,
-        path=path,
-    )
+
+    if real:
+        env = RealRobotCubeEnv(
+            cube_goal_pose,
+            goal_difficulty,
+            action_type=action_type,
+            frameskip=frameskip,
+            sim=sim,
+            visualization=visualization,
+            reward_fn=reward_fn,
+            termination_fn=termination_fn,
+            initializer=initializer,
+            episode_length=episode_length,
+            path=path,
+        )
+    else:
+        env = RobotCubeEnv(
+            cube_goal_pose,
+            goal_difficulty,
+            action_type=action_type,
+            frameskip=frameskip,
+            sim=sim,
+            visualization=visualization,
+            reward_fn=reward_fn,
+            termination_fn=termination_fn,
+            initializer=initializer,
+            episode_length=episode_length,
+            path=path,
+        )
     env.seed(seed=rank)
     env.action_space.seed(seed=rank)
     env = wrappers.NewToOldObsWrapper(env)
@@ -143,7 +161,7 @@ def make_env_cls(
         initializer = get_initializer(initializer)(diff)
 
     env_cls = functools.partial(
-        cube_env.CubeEnv,
+        cube_env.RobotCubeEnv,
         cube_goal_pose=None,
         goal_difficulty=diff,
         initializer=initializer,

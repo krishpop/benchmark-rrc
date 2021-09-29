@@ -1,3 +1,4 @@
+import enum
 from collections import namedtuple
 from copy import copy
 
@@ -75,6 +76,14 @@ def render_frame(env, **cam_kwargs):
     )
     rgb_array = rgb_array[:, :, :3]
     return rgb_array
+
+
+class PolicyMode(enum.Enum):
+    RESET = enum.auto()
+    TRAJ_OPT = enum.auto()
+    IMPEDANCE = enum.auto()
+    RL_PUSH = enum.auto()
+    RESIDUAL = enum.auto()
 
 
 ContactResult = namedtuple(
