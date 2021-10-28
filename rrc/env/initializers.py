@@ -308,7 +308,7 @@ class DumbInitializer(RandomInitializer):
             init = move_cube.Pose.from_dict(self.default_initial_state)
         else:
             init = super().get_initial_state()
-        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
+        # init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
         return init
 
     def get_goal(self):

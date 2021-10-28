@@ -32,13 +32,20 @@ from diffcp import SolverError
 from gym import logger as gymlogger
 from pybullet_utils import bullet_client
 from rrc.env.env_utils import ContactResult
+from rrc.env import fop
 from rrc.env.termination_fns import pos_and_rot_close_to_goal
-from rrc.mp.const import (CUBE_HALF_WIDTH, CUBE_MASS, CUBE_WIDTH, CUBOID_MASS,
-                          CUBOID_SIZE, CUSTOM_LOGDIR, INIT_JOINT_CONF)
+from rrc.mp.const import (
+    CUBE_HALF_WIDTH,
+    CUBE_MASS,
+    CUBE_WIDTH,
+    CUBOID_MASS,
+    CUBOID_SIZE,
+    CUSTOM_LOGDIR,
+    INIT_JOINT_CONF,
+)
 from rrc_iprl_package.control import controller_utils_cube as c_utils
 from rrc_iprl_package.control.contact_point import ContactPoint
-from rrc_iprl_package.control.custom_pinocchio_utils import \
-    CustomPinocchioUtils
+from rrc_iprl_package.control.custom_pinocchio_utils import CustomPinocchioUtils
 from scipy.interpolate import interp1d
 from scipy.linalg import block_diag
 from scipy.spatial.transform import Rotation
@@ -48,9 +55,14 @@ from trifinger_simulation.tasks import move_cube
 from .cube_env_real import ActionType
 from .initializers import fixed_g_init
 from .pinocchio_utils import PinocchioUtils
-from .reward_fns import (_corner_error, _orientation_error, _position_error,
-                         _tip_distance_to_cube, competition_reward,
-                         training_reward5)
+from .reward_fns import (
+    _corner_error,
+    _orientation_error,
+    _position_error,
+    _tip_distance_to_cube,
+    competition_reward,
+    training_reward5,
+)
 from .viz import CubeMarker, CuboidMarker, VisualMarkers, Viz
 
 
@@ -1953,7 +1965,7 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             ]
 
     def get_contact_points(self):
-        finger_contact_states = [
+        finger_contacts = [
             p.getContactPoints(
                 bodyA=self.platform.simfinger.finger_id,
                 linkIndexA=tip,
@@ -1961,10 +1973,74 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             )
             for tip in self.platform.simfinger.pybullet_tip_link_indices
         ]
-        finger_contact_states = [
-            ContactResult(*x[0]) for x in finger_contact_states if x and len(x[0]) == 14
-        ]
+        finger_contact_states = []
+        for x in finger_contacts:
+            if x and len(x[0]) == 14:
+                finger_contact_states.append(ContactResult(*x[0]))
+            else:
+                finger_contact_states.append(None)
         return finger_contact_states
+
+    def update_contact_state(self, des_tip_forces):
+        finger_contact_states = self.get_contact_points()
+        obs_tip_forces = []
+        obs_tip_dir = []
+        obs_tip_pos = []
+        for contact in finger_contact_states:
+            if contact is not None:
+                contact_dir = np.array(
+                    [
+                        contact.lateralFrictionDir1,
+                        contact.lateralFrictionDir2,
+                    ]
+                )
+                contact_pos = np.array([contact.positionOnA, contact.positionOnB])
+                contact_force = np.array(
+                    [
+                        contact.normalForce,
+                        contact.lateralFriction1,
+                        contact.lateralFriction2,
+                    ]
+                )
+                obs_tip_forces.append(contact_force)
+                obs_tip_dir.append(contact_dir)
+                obs_tip_pos.append(contact_pos)
+            else:
+                obs_tip_forces.append(np.zeros((3, 3)))
+                obs_tip_dir.append(None)
+                obs_tip_pos.append(np.zeros((3, 3)))
+
+        self._current_tip_force, self._current_contact_ori = (
+            obs_tip_forces,
+            rotations,
+        ) = self.rotate_obs_force(obs_tip_forces, obs_tip_dir)
+        self._current_contact_pos = [x[1] for x in obs_tip_pos]
+
+        if self.step_count % 50 == 0:
+            gymlogger.debug(
+                f"del_tip_forces: {np.abs(des_tip_forces - obs_tip_forces)}"
+            )
+
+        self.register_custom_log("des_tip_forces", des_tip_forces)
+        self.register_custom_log("obs_tip_forces", obs_tip_forces)
+        self.register_custom_log("obs_tip_dir", obs_tip_dir)
+        self.register_custom_log("obs_tip_pos", obs_tip_pos)
+
+    def rotate_obs_force(self, obs_force, tip_dir):
+        forces = []
+        tip_rotations = []
+        for f, td in zip(obs_force, tip_dir):
+            if td is None:
+                forces.append(0)
+                tip_rotations.append(None)
+            else:
+                v, w = td
+                u = np.cross(v, w)
+                R = np.vstack([u, v, w]).T
+                R = Rotation.from_matrix(R).as_matrix()
+                tip_rotations.append(R)
+                forces.append(-R @ f)
+        return forces, tip_rotations
 
     def reset(self):
         self._reset_direct_simulation()
@@ -2000,6 +2076,9 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         self._integral = error * self.ki + integral_weight * self._integral
         tip_forces_wf = np.clip(self._integral + self._des_tip_forces, -2, 2)
         torque = self.compute_joint_torques(des_wrench, tip_forces_wf)
+        torque = np.clip(
+            torque, self.robot_torque_space.low, self.robot_torque_space.high
+        )
         self.register_custom_log("des_torque", torque)
         self.register_custom_log(
             "q_current", self.prev_observation["observation"]["position"]
@@ -2024,7 +2103,7 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
 
         for i, l_cf in enumerate(tip_forces_of):
             cp_of = cp_list[i]
-            R_cp_2_o = Rotation.from_quat(cp_of.quat_of)
+            R_cp_2_o = Rotation.from_quat(cp_of[1])
             R_o_2_w = Rotation.from_quat(
                 self.prev_observation["achieved_goal"]["orientation"]
             )
@@ -2036,10 +2115,10 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
     def compute_joint_torques(self, des_wrench, tip_forces_wf):
         if self.main_ctrl is not None:
             x_goal = self.forward_sim_path(des_wrench)
-            x_curr = self.prev_observation["achieved_goal"]["position"]
             q_curr = self.prev_observation["observation"]["position"]
             current_ft_pos = self.pinocchio_utils.forward_kinematics(q_curr)
-            ft_pos_goal = [ft + (x_goal - x_curr) for ft in current_ft_pos]
+            x_goal = x_goal.reshape((3, 3))
+            ft_pos_goal = [ft_des - ft for ft_des, ft in zip(x_goal, current_ft_pos)]
             tip_forces = tip_forces_wf.reshape((3, 3))
             dir1 = tip_forces[0]
             dir1 = (dir1) / np.sqrt(np.sum((dir1) ** 2))
@@ -2071,38 +2150,59 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             #         correct_torque=True,
             #     )
         else:
+            q_curr = self.prev_observation["observation"]["position"]
+            current_ft_pos = self.pinocchio_utils.forward_kinematics(q_curr)
+            # x_goal, dx_goal = self.forward_sim_path(des_wrench)
+            # x_goal = x_goal.reshape((3, 3))
+            delta_x = [np.zeros(3) for _ in zip(current_ft_pos, current_ft_pos)]
             torque = 0
             for fid in range(3):
-                torque += self.compute_torque_single_finger(tip_forces_wf[fid], fid)
+                torque += self.compute_torque_single_finger(
+                    tip_forces_wf[fid], fid, delta_x[fid]
+                )
         return torque
 
-    def compute_torque_single_finger(self, tip_force_wf, finger_id):
+    def compute_torque_single_finger(self, tip_force_wf, finger_id, delta_x):
+        Kp = [20, 20, 40, 20, 20, 40, 20, 20, 40]
+
+        Kp_x = Kp[finger_id * 3 + 0]
+        Kp_y = Kp[finger_id * 3 + 1]
+        Kp_z = Kp[finger_id * 3 + 2]
+        Kp = np.diag([Kp_x, Kp_y, Kp_z])
+        # Kv = [0.7] * 9
         q_current = self.prev_observation["observation"]["position"]
+        # dq_current = self.prev_observation["observation"]["velocity"]
+        delta_x = np.array(delta_x)
+        # delta_dx = np.expand_dims(np.array(tip_vel_desired), 1) - np.array(dx_current)
+
         Ji = self.pinocchio_utils.get_tip_link_jacobian(finger_id, q_current)
         # Just take first 3 rows, which correspond to linear velocities of fingertip
         Ji = Ji[:3, :]
         # Get g matrix for gravity compensation
         _, g = self.pinocchio_utils.get_lambda_and_g_matrix(
-            finger_id, q_current, Ji, None
+            finger_id, q_current, Ji, self._gravity
         )
         # gymlogger.debug("Gravity: {}".format(g))
-        torque = Ji.T @ tip_force_wf - g
+        torque = np.squeeze(Ji.T @ (Kp @ delta_x) + 0.5 * Ji.T @ tip_force_wf) + g
         return torque
 
-    def get_cp_of_list(self, cp_params, obj_pose=None, use_actual_cp=True):
+    def get_cp_of_list(self, cp_params, obj_pose, use_actual_cp=True):
         cp_list = []
         if use_actual_cp and self._current_contact_pos is not None:
             R_w_2_of = Rotation.from_quat(obj_pose.orientation).inv().as_matrix()
             flip_z = Rotation.from_rotvec([0, 0, np.pi]).as_matrix()
             for pos, ori in zip(self._current_contact_pos, self._current_contact_ori):
-                cp_of = c_utils.get_of_from_wf(pos, obj_pose)
-                cp_quat = Rotation.from_matrix(R_w_2_of @ flip_z @ ori).as_quat()
-                cp_list.append(ContactPoint(cp_of, cp_quat))
+                if ori is None:
+                    cp_list.append(None)
+                else:
+                    cp_of = c_utils.get_of_from_wf(pos, obj_pose)
+                    cp_quat = Rotation.from_matrix(R_w_2_of @ flip_z @ ori).as_quat()
+                    cp_list.append((cp_of, cp_quat))
         else:
             for cp_param in cp_params:
                 if cp_param is not None:
                     cp_of = c_utils.get_cp_of_from_cp_param(cp_param)
-                    cp_list.append(cp_of)
+                    cp_list.append((cp_of.pos_of, cp_of.quat_of))
         # if use_actual_cp and self.debug:
         #     cp_pos = np.array([cp.pos_of for cp in cp_list])
         #     cp_ori = np.array([cp.quat_of for cp in cp_list])
@@ -2113,175 +2213,60 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         #     gymlogger.debug(f"Des CP List: pos ({des_cp_pos}),\nori ({des_cp_ori})")
         return cp_list
 
+    def get_cp_wf_list(self, cp_params, obj_pose, use_actual_cp=True):
+        cp_of_list = self.get_cp_of_list(cp_params, obj_pose, use_actual_cp)
+        R_o_2_wf = Rotation.from_quat(obj_pose.orientation)
+        cp_list = []
+        for cp_of in cp_of_list:
+            if cp_of is not None:
+                c_pos, c_ori = cp_of
+                c_pos_wf = c_utils.get_wf_from_of(c_pos, obj_pose)
+                # c_pos_wf = R_o_2_wf.as_matrix() @ c_pos
+                c_ori_wf = R_o_2_wf * Rotation.from_quat(c_ori)
+                c_ori_wf = c_ori_wf.as_quat()
+                cp_list.append((c_pos_wf, c_ori_wf))
+            else:
+                cp_list.append(None)
+        return cp_list
+
     def setup_contact_force_opt(self):
-        self.obj_mu = 1.20
-        self.mass = 0.016
-        self.target_n = 1.0
-
-        # Try solving optimization problem
-        # contact force decision variable
-        self.target_n_t = torch.as_tensor(
-            np.array([self.target_n, 0, 0] * 3), dtype=torch.float32
+        self.fop = fop.BatchForceOptProblem(
+            obj_mu=1.0,
+            mass=0.016,
+            gravity=self._gravity,
+            target_n=0.1,
+            cone_approx=self.cone_approx,
         )
-        self.target_n_cp = cp.Parameter(
-            (9,), name="target_n", value=self.target_n_t.data.numpy()
-        )
-        self.L = cp.Variable(9, name="l")
-        self.W = cp.Parameter((6,), name="w_des")
-        self.G = cp.Parameter((6, 9), name="grasp_m")
-        cm = np.vstack((np.eye(3), np.zeros((3, 3)))) * self.mass
-
-        inputs = [self.G, self.W, self.target_n_cp]
-        outputs = [self.L]
-        # self.Cm = cp.Parameter((6, 3), value=cm*self.mass, name='com')
-
-        f_g = np.array([0, 0, self._gravity])
-        if self.object_frame:
-            self.R_w_2_o = cp.Parameter((6, 6), name="r_w_2_o")
-            w_ext = self.W + self.R_w_2_o @ cm @ f_g
-            inputs.append(self.R_w_2_o)
-        else:
-            w_ext = self.W + cm @ f_g
-
-        f = self.G @ self.L - w_ext  # generated contact forces must balance wrench
-
-        # Objective function - minimize force magnitudes
-        contact_force = self.L - self.target_n_cp
-        cost = cp.sum_squares(contact_force)
-
-        # Friction cone constraints; >= 0
-        self.constraints = []
-        self.cone_constraints = []
-        if self.cone_approx:
-            self.cone_constraints += [cp.abs(self.L[1::3]) <= self.obj_mu * self.L[::3]]
-            self.cone_constraints += [cp.abs(self.L[2::3]) <= self.obj_mu * self.L[::3]]
-        else:
-            self.cone_constraints.append(
-                cp.SOC(self.obj_mu * self.L[::3], (self.L[2::3] + self.L[1::3])[None])
-            )
-        self.constraints.append(f == np.zeros(f.shape))
-
-        self.prob = cp.Problem(
-            cp.Minimize(cost), self.cone_constraints + self.constraints
-        )
-        self.policy = CvxpyLayer(self.prob, inputs, outputs)
         return
 
-    def get_r2w_rot(self, obj_pose):
-        quat_o_2_w = obj_pose[3:]
-        R_w_2_o = Rotation.from_quat(quat_o_2_w).as_matrix().T
-        R_w_2_o = block_diag(R_w_2_o, R_w_2_o)
-        return R_w_2_o
-
-    def solve_fop(self, G_t, des_wrench_t, obj_pose):
-        policy = self.policy
-        inputs = [G_t, des_wrench_t, self.target_n_t]
-        if self.object_frame:
-            R_w_2_o = self.get_r2w_rot(obj_pose)
-            R_w_2_o_t = torch.from_numpy(R_w_2_o.astype("float32"))
-            inputs.append(R_w_2_o_t)
-        try:
-            (balance_force,) = policy(*inputs)
-        except SolverError:
-            balance_force = None
-        return balance_force
-
     def get_balance_contact_forces(self, des_wrench, obj_pose):
-        cp_list = self.get_cp_of_list(
+        cp_list = self.get_cp_wf_list(
             self.cp_params,
             move_cube.Pose(obj_pose[:3], obj_pose[3:]),
             self.use_actual_cp,
         )
-        # Get grasp matrix
-        G = self.get_grasp_matrix(cp_list, obj_pose)
-        G_t = torch.from_numpy(G.astype("float32"))
-        # External wrench on object from gravity
-        # des_wrench = des_wrench.squeeze().unsqueeze(-1)
-        des_wrench_t = torch.from_numpy(des_wrench.astype("float32"))
-        balance_force = self.solve_fop(G_t, des_wrench_t, obj_pose)
+        cp_list = np.array([np.concatenate(cpwf) for cpwf in cp_list])
+        balance_force_t = self.fop(
+            torch.from_numpy(des_wrench.astype("float32")).to(self.fop.device),
+            # obj_pose,
+            cp_list,
+        )
         # Check if solution was feasible
-        if balance_force is None:
+        if balance_force_t is None:
             gymlogger.debug(
                 "Did not solve contact force opt for "
                 f"desired wrench: {des_wrench}, contact points: {self.cp_params}"
             )
         else:
-            balance_force = np.squeeze(balance_force.detach().numpy())
-
-        if self.object_frame:
-            R_w_2_o = self.get_w2o_rot(obj_pose)
-            weight = (
-                R_w_2_o
-                @ np.vstack([np.eye(3) * self.mass, np.zeros((3, 3))])
-                @ np.array([0, 0, self._gravity])
-            )
-            w_ext = des_wrench + weight
-        else:
-            weight = np.vstack([np.eye(3), np.zeros((3, 3))]) @ np.array(
-                [0, 0, self._gravity * self.mass]
-            )
-            w_ext = des_wrench + weight
-        f = G @ balance_force - w_ext
+            balance_force = balance_force_t.detach().cpu().numpy()
+            balance_force = np.squeeze(balance_force)
+        f = self.fop.balance_force_test(
+            des_wrench, balance_force, cp_list
+        )  # , obj_pose)
         if self.step_count % 50 == 0:
-            gymlogger.debug(f"Ext wrench: {w_ext} = {des_wrench} + {weight}")
+            # gymlogger.debug(f"Ext wrench: {w_ext} = {des_wrench} + {weight}")
             gymlogger.debug(f"Balance force test: {f}. stepct: {self.step_count}")
         return balance_force
-
-    def get_grasp_matrix(self, cp_list, obj_pose):
-        GT_list = []
-        fnum = len(cp_list)
-        H = self._get_H_matrix(fnum)
-        for cp_of in cp_list:
-            if cp_of is not None:
-                GT_i = self._get_grasp_matrix_single_cp(cp_of, obj_pose)
-                GT_list.append(GT_i)
-            else:
-                GT_list.append(np.zeros((3, 3)))
-        GT_full = np.concatenate(GT_list)
-        GT = H @ GT_full
-        return GT.T
-
-    def _get_grasp_matrix_single_cp(self, cp_of, obj_pose):
-        P = self._get_P_matrix(cp_of, obj_pose)
-        quat_o_2_w = obj_pose[3:]
-        quat_cp_2_o = cp_of.quat_of
-
-        # Orientation of cp frame w.r.t. world frame
-        # quat_cp_2_w = quat_o_2_w * quat_cp_2_o
-        # R is rotation matrix from contact frame i to world frame
-        if self.object_frame:
-            rot = Rotation.from_quat(quat_cp_2_o)
-        else:
-            rot = Rotation.from_quat(quat_o_2_w) * Rotation.from_quat(quat_cp_2_o)
-        R = rot.as_matrix()
-        R_bar = block_diag(R, R)
-
-        G = P @ R_bar
-        return G.T
-
-    def _get_P_matrix(self, cp_of, obj_pose):
-        cp_pos_of = cp_of.pos_of  # Position of contact point in object frame
-        quat_o_2_w = obj_pose[3:]
-        if self.object_frame:
-            r = cp_pos_of
-        else:
-            r = Rotation.from_quat(quat_o_2_w).as_matrix() @ cp_pos_of
-        S = np.array([[0, -r[2], r[1]], [r[2], 0, -r[0]], [-r[1], r[0], 0]])
-
-        P = np.eye(6)
-        P[3:6, 0:3] = S
-        return P
-
-    def _get_H_matrix(self, fnum):
-        H_i = np.array(
-            [
-                [1, 0, 0, 0, 0, 0],
-                [0, 1, 0, 0, 0, 0],
-                [0, 0, 1, 0, 0, 0],
-            ]
-        )
-        H = block_diag(H_i, H_i, H_i)
-        return H
 
     def step(self, action):
         action[:3] *= self.force_factor
@@ -2312,58 +2297,6 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         self.action_space = self.wrench_space
         return obs, rew, done, info
 
-    def update_contact_state(self, des_tip_forces):
-        finger_contact_states = self.get_contact_points()
-        obs_tip_forces = []
-        obs_tip_dir = []
-        obs_tip_pos = []
-        for contact in finger_contact_states:
-            contact_dir = np.array(
-                [
-                    contact.lateralFrictionDir1,
-                    contact.lateralFrictionDir2,
-                ]
-            )
-            contact_pos = np.array([contact.positionOnA, contact.positionOnB])
-            contact_force = np.array(
-                [
-                    contact.normalForce,
-                    contact.lateralFriction1,
-                    contact.lateralFriction2,
-                ]
-            )
-            obs_tip_forces.append(contact_force)
-            obs_tip_dir.append(contact_dir)
-            obs_tip_pos.append(contact_pos)
-
-        self._current_tip_force, self._current_contact_ori = (
-            obs_tip_forces,
-            rotations,
-        ) = self.rotate_obs_force(obs_tip_forces, obs_tip_dir)
-        self._current_contact_pos = [x[1] for x in obs_tip_pos]
-
-        if self.step_count % 50 == 0:
-            gymlogger.debug(
-                f"del_tip_forces: {np.abs(des_tip_forces - obs_tip_forces)}"
-            )
-
-        self.register_custom_log("des_tip_forces", des_tip_forces)
-        self.register_custom_log("obs_tip_forces", obs_tip_forces)
-        self.register_custom_log("obs_tip_dir", obs_tip_dir)
-        self.register_custom_log("obs_tip_pos", obs_tip_pos)
-
-    def rotate_obs_force(self, obs_force, tip_dir):
-        forces = []
-        tip_rotations = []
-        for f, td in zip(obs_force, tip_dir):
-            v, w = td
-            u = np.cross(v, w)
-            R = np.vstack([u, v, w]).T
-            R = Rotation.from_matrix(R).as_matrix()
-            tip_rotations.append(R)
-            forces.append(-R @ f)
-        return forces, tip_rotations
-
     def execute_simple_traj(self, t, q, dq):
         KP = [200, 200, 400, 200, 200, 400, 200, 200, 400]
         KV = [0.7, 0.7, 0.8, 0.7, 0.7, 0.8, 0.7, 0.7, 0.8]
@@ -2393,7 +2326,6 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             grav=self._gravity,
         )
         torque = np.clip(torque, self.action_space.low, self.action_space.high)
-        self.last_prev_observation = self.prev_observation
         self.prev_observation, _, _, _ = super(RobotWrenchCubeEnv, self).step(torque)
         return
 
@@ -2569,12 +2501,12 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
                 ft_vel_goal_list.append(new_vel)
             current_position = self.prev_observation["observation"]["position"]
             current_velocity = self.prev_observation["observation"]["velocity"]
-            current_ft_pos = self.pinocchio_utils.forward_kinematics(
-                current_position
+            current_ft_pos = np.array(
+                self.pinocchio_utils.forward_kinematics(current_position)
             ).reshape((3, 3))
             if self.main_ctrl is not None:
                 torque = self.main_ctrl.kinematics.imp_ctrl_3_fingers(
-                    current_position.reshape((3, 3)),
+                    [current_position.reshape((3, 3))] * 3,
                     [[0.0] * 3] * 3,
                     [4, 8, 12],
                     [np.zeros((3))] * 3,
@@ -2612,16 +2544,21 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
                 return done
         return done
 
-    def forward_sim_path(self, des_wrench):
-        obj_pose = self.prev_observation["achieved_goal"]
-        if self.last_prev_observation is not None:
-            last_obj_pose = self.last_prev_observation["achieved_goal"]
-        dt = self.time_step_s * self.frameskip * self.integral_control_freq
-        x_ddot = des_wrench[:3] / self.mass
-        x0 = obj_pose["position"]
-        v0 = (obj_pose["position"] - last_obj_pose["position"]) / dt
+    def forward_sim_path(self, des_wrench, dt=0.04):
+        q = self.prev_observation["observation"]["position"]
+        dq = self.prev_observation["observation"]["velocity"]
+        v0 = []
+        for fid in range(3):
+            Ji = self.pinocchio_utils.get_tip_link_jacobian(fid, q)
+            # Just take first 3 rows, which correspond to linear velocities of fingertip
+            Ji = Ji[:3, :]
+            v0.append(Ji @ np.expand_dims(np.array(dq), 1))
+        v0 = np.concatenate(v0).squeeze()
+        x_ddot = np.repeat(des_wrench[:3] / self.fop.mass, 3, axis=0).squeeze()
+        x0 = np.concatenate(self.pinocchio_utils.forward_kinematics(q))
         x = dt * 0.5 * (x_ddot * dt) + v0 * dt + x0
-        return x
+        dx = x_ddot * dt + v0
+        return x, dx
 
     def run_finger_traj_opt(
         self, current_position, obj_pose, ft_goal, nlp, interp_n=26

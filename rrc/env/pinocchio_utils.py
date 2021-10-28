@@ -22,13 +22,16 @@ class PinocchioUtils:
     np.fill_diagonal(I3, [3.5e-5, 3.5e-5, 1.4e-6])
     Is = [I1, I2, I3]
 
-    def __init__(self):
+    def __init__(self, urdf_path=None):
         """
         Initializes the finger model on which control's to be performed.
         """
-        self.urdf_path = (
-            "/opt/blmc_ei/src/robot_properties_fingers/urdf/pro/trifingerpro.urdf"
-        )
+        if urdf_path is not None:
+            self.urdf_path = urdf_path
+        else:
+            self.urdf_path = (
+                "/opt/blmc_ei/src/robot_properties_fingers/urdf/pro/trifingerpro.urdf"
+            )
         if not osp.exists(self.urdf_path):
             base_path = osp.dirname(trifinger_simulation.__file__)
             self.urdf_path = osp.join(
@@ -95,10 +98,10 @@ class PinocchioUtils:
         )
         return Ji
 
-    def get_lambda_and_g_matrix(self, finger_id, q, Jvi, grav):
+    def get_lambda_and_g_matrix(self, finger_id, q, Jvi, grav=-9.81):
         Ai = np.zeros((9, 9))
         g = np.zeros(9)
-        grav = np.array([0, 0, -9.81])
+        grav = np.array([0, 0, grav])
         order = [0, 1, 3]
         for j in range(3):
             id = (finger_id + 1) * 10 + order[j]
