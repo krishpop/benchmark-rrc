@@ -33,7 +33,19 @@ def test_cube_env(
             position=np.array([-CUBE_WIDTH * 0.6, -CUBE_WIDTH * 0.6, CUBE_HALF_WIDTH]),
             orientation=np.array([0, 0, 0, 1]),
         )
-        init = initializers.dumb_init(1, default_goal=default_goal)
+        if gravity == 0.0:
+            print("Setting initial cube position to 1.5*cube_half_width")
+            default_init = dict(
+                position=np.array(
+                    [-CUBE_WIDTH * 0.0, -CUBE_WIDTH * 0.0, 3 * CUBE_HALF_WIDTH]
+                ),
+                orientation=np.array([0, 0, 0, 1]),
+            )
+        else:
+            default_init = None
+        init = initializers.dumb_init(
+            1, default_goal=default_goal, default_initial_state=default_init
+        )
     else:
         init = initializers.dumb_init(1)
     if env == "real":
@@ -71,10 +83,11 @@ def test_cube_env(
         env = wrappers.ResidualPDWrapper(env, **pd_kwargs)
     env = wrappers.PyBulletClearGUIWrapper(env)
     obs = env.reset()
-    # env.gravity = -9.81
-    # p.setGravity(
-    #     0, 0, -9.81, physicsClientId=env.platform.simfinger._pybullet_client_id
-    # )
+    if gravity == 0.0:
+        env.gravity = -9.81
+        p.setGravity(
+            0, 0, -9.81, physicsClientId=env.platform.simfinger._pybullet_client_id
+        )
     d = False
     while not d:
         # q = obs["observation"]["position"]
