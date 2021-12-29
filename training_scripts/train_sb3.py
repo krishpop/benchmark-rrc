@@ -13,15 +13,12 @@ from gym.spaces import flatten_space
 from rrc.env import make_env
 from rrc.env.env_utils import LinearSchedule
 from rrc.env.reward_fns import *
-from rrc.env.termination_fns import (stay_close_to_goal,
-                                     stay_close_to_goal_level_4)
+from rrc.env.termination_fns import stay_close_to_goal, stay_close_to_goal_level_4
 from stable_baselines3 import SAC, TD3, HerReplayBuffer
-from stable_baselines3.common.callbacks import (BaseCallback, CallbackList,
-                                                EvalCallback)
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import configure
-from stable_baselines3.common.preprocessing import (get_flattened_obs_dim,
-                                                    is_image_space)
+from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.torch_layers import CombinedExtractor
 from stable_baselines3.common.utils import safe_mean
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -264,7 +261,11 @@ def main(
 ):
     exp_root = "./data"
     hms_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-    exp_name = "HER-SAC_rrc-diff{}".format(diff)
+    if her:
+        exp_name = "HER-SAC_rrc-diff{}".format(diff)
+    else:
+        exp_name = "SAC_rrc-diff{}".format(diff)
+
     exp_dir = osp.join(exp_root, exp_name, hms_time)
     os.makedirs(exp_dir)
     if not dry_run:
@@ -408,7 +409,6 @@ if __name__ == "__main__":
     parser.add_argument("--init", default="centered_init", type=str)
     parser.add_argument("--gravity", default="-9.81", type=str)
     parser.add_argument("--scale", type=str)
-    parser.add_argument("--object_frame", "--of", action="store_true")
     parser.add_argument("--action_type", default=None)
 
     # Experiment args
@@ -469,7 +469,6 @@ if __name__ == "__main__":
         env_cls=args.env_cls,
         gravity=args.gravity,
         seed=args.seed,
-        object_frame=args.object_frame,
         scale=args.scale,
         action_type=args.action_type,
     )

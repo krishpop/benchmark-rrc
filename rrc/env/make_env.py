@@ -177,7 +177,7 @@ def make_env_cls(
 
 def env_fn_generator(
     diff=3,
-    episode_length=500,
+    episode_length=11900,
     reward_fn=None,
     termination_fn=None,
     save_mp4=False,
@@ -189,6 +189,7 @@ def env_fn_generator(
     flatten_goal=True,
     scale=None,
     action_type=None,
+    monitor=True,
     **env_kwargs,
 ):
     reward_fn = get_reward_fn(reward_fn)
@@ -207,9 +208,9 @@ def env_fn_generator(
         termination_fn = get_termination_fn(termination_fn)
 
     info_keywords = ("ori_err", "pos_err")
-    if env_cls in ["real_env", "wrench_robot_env"]:
+    if env_cls in ["real_env", "robot_env", "robot_wrench_env", "robot_contact_env"]:
         info_keywords = ("ori_err", "pos_err", "corner_err", "tot_tip_pos_err")
-    if env_cls == "real_env":
+    if env_cls in ["real_env", "robot_env"]:
         if action_type is not None:
             if action_type not in [
                 "torque",
@@ -225,13 +226,11 @@ def env_fn_generator(
             else:
                 env_kwargs["action_type"] = ActionType.POSITION
         env_kwargs["sim"] = True
-        if "object_frame" in env_kwargs:
-            env_kwargs.pop("object_frame")
         if scale is not None:
             if isinstance(scale, list):
                 scale = np.asarray(scale)
             env_kwargs["action_scale"] = scale
-    else:
+    elif env_cls not in ["robot_contact_env", "robot_env"]:
         # TODO (fix): hard-coding force and torque factor
         if scale is not None and len(scale) == 6:
             force_factor, torque_factor = np.asarray(scale[:3]), np.asarray(scale[3:])
@@ -262,12 +261,14 @@ def env_fn_generator(
             )
         if save_mp4:
             env = wrappers.MonitorPyBulletWrapper(env, save_dir, save_freq)
-        elif env_kwargs.get("visualization", False):
-            env = wrappers.PyBulletClearGUIWrapper(env)
+        # elif env_kwargs.get("visualization", False):
+        #    env = wrappers.PyBulletClearGUIWrapper(env)
         if flatten_goal:
             env = wrappers.FlattenGoalObs(
                 env, ["desired_goal", "achieved_goal", "observation"]
             )
-        return wrappers.Monitor(env, info_keywords=info_keywords)
+        if monitor:
+            env = wrappers.Monitor(env, info_keywords=info_keywords)
+        return env
 
     return env_fn

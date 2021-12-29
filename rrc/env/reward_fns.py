@@ -149,6 +149,29 @@ def training_reward5(previous_observation, observation, info):
     return sum([_lgsk_kernel(d) for d in dist])
 
 
+def training_reward_s2r2(previous_observation, observation, info):
+    finger_reach_object_weight = -250  # info["finger_reach_object_weight"]
+    finger_movement_weight = -0.5  # info["finger_movement_weight"]
+    object_dist_weight = 2000  # info["object_dist_weight"]
+    dt = 0.004
+    fingertip_vel = (
+        observation["observation"]["tip_positions"]
+        - previous_observation["observation"]["tip_positions"]
+    ) / dt
+    finger_movement_penalty = finger_movement_weight * np.square(fingertip_vel).sum()
+    curr_norms = _tip_distance_to_cube(observation)
+    prev_norms = _tip_distance_to_cube(previous_observation)
+    if True:  # info["steps"] < 1e6:
+        finger_reach_object_reward = finger_reach_object_weight * (
+            curr_norms - prev_norms
+        )
+    else:
+        finger_reach_object_reward = 0.0
+    keypoints_kernel_sum = training_reward5(previous_observation, observation, info)
+    pose_reward = object_dist_weight * dt * keypoints_kernel_sum
+    return finger_reach_object_reward + finger_movement_penalty + pose_reward
+
+
 def corner_shaped_reward(previous_observation, observation, info):
     corner_rew = training_reward5(previous_observation, observation, info)
     _tip_dist = _tip_distance_to_cube(observation)
@@ -162,6 +185,7 @@ train2 = training_reward2
 train3 = training_reward3
 train4 = training_reward4
 train5 = training_reward5
+train6 = training_reward_s2r2
 corner_shaped = corner_shaped_reward
 competition = competition_reward
 

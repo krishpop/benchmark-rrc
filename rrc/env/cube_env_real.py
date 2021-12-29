@@ -9,8 +9,7 @@ import gym
 import numpy as np
 import pybullet as p
 import trifinger_simulation
-from rrc.mp.const import (CUBOID_MASS, CUBOID_SIZE, CUSTOM_LOGDIR,
-                          INIT_JOINT_CONF)
+from rrc.mp.const import CUBOID_MASS, CUBOID_SIZE, CUSTOM_LOGDIR, INIT_JOINT_CONF
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation.tasks import move_cube
 
@@ -44,6 +43,8 @@ class ActionType(enum.Enum):
     #: the position controller are added to the torques in the action before
     #: applying them to the robot.
     TORQUE_AND_POSITION = enum.auto()
+    CONTACT_FORCE = enum.auto()
+    OBJECT_WRENCH = enum.auto()
 
 
 class RealRobotCubeEnv(gym.GoalEnv):

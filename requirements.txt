@@ -2,7 +2,7 @@ casadi==3.5.5
 cvxpy==1.1.11
 cvxpylayers==0.1.4
 dm-control==0.0.322773188
-gym>=0.18.0
+gym>=0.18.0,<0.21.0
 gym-notebook-wrapper==1.2.4
 h5py==2.10.0
 imageio==2.9.0

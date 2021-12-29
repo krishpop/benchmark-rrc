@@ -19,7 +19,6 @@ def test_cube_env(
     visualization,
     use_actual_cp,
     gravity,
-    benchmark,
 ):
     if logdir:
         path = osp.join(osp.split(osp.abspath(__file__))[0], logdir)
@@ -62,10 +61,10 @@ def test_cube_env(
             path=path,
             force_factor=1.0,
             torque_factor=0.1,
-            episode_length=1000,
+            episode_length=5000,
             use_actual_cp=use_actual_cp,
-            use_benchmark_controller=benchmark,
         )
+        env.use_impedance = False
     elif env == "hog":
         env = cube_env.ContactForceWrenchCubeEnv(
             dict(position=[0, 0, 0.05], orientation=[0, 0, 0, 1]),
@@ -114,7 +113,6 @@ def main(
     visualization,
     use_actual_cp,
     gravity,
-    benchmark,
 ):
     if policy == "lift":
         ac = np.array([0, 0, 0.75, 0, 0, 0])
@@ -147,7 +145,6 @@ def main(
         visualization,
         use_actual_cp,
         gravity,
-        benchmark,
     )
 
 
@@ -166,7 +163,6 @@ if __name__ == "__main__":
     parser.add_argument("--kd", default=1.0, type=float)
     parser.add_argument("--use_cp", action="store_true")
     parser.add_argument("--gravity", default=-9.81, type=float)
-    parser.add_argument("--benchmark", action="store_true")
 
     args = parser.parse_args()
     pd_kwargs = dict(Kp=args.kp, Kd=args.kd)
@@ -181,5 +177,4 @@ if __name__ == "__main__":
         args.visualization,
         args.use_cp,
         args.gravity,
-        args.benchmark,
     )
