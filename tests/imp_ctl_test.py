@@ -10,7 +10,10 @@ import sys
 
 import numpy as np
 from rrc.env import cube_env, initializers, termination_fns
-from rrc_iprl_package.control.control_policy import ImpedanceControllerPolicy
+from rrc_iprl_package.control.control_policy import (
+    CuboidImpedanceControllerPolicy,
+    ImpedanceControllerPolicy,
+)
 from trifinger_simulation.tasks import move_cube
 
 FRAMESKIP = 1
@@ -28,11 +31,11 @@ class RandomPolicy:
         return self.action_space.sample()
 
 
-def main():
+def main(difficulty, goal_pose_json, object_shape):
     # the difficulty level and the goal pose (as JSON string) are passed as
     # arguments
-    difficulty = int(sys.argv[1])
-    goal_pose_json = sys.argv[2]
+    # difficulty = int(sys.argv[1])
+    # goal_pose_json = sys.argv[2]
     if os.path.exists(goal_pose_json):
         with open(goal_pose_json) as f:
             goal = json.load(f)["goal"]
@@ -40,10 +43,15 @@ def main():
         goal = json.loads(goal_pose_json)
     goal = {k: np.asarray(goal[k]) for k in goal}
     initial_pose = move_cube.sample_goal(-1)
-    initial_pose.position = np.array([0.0, 0.0, move_cube._CUBOID_SIZE[2] / 2])
+    if args.object_shape == "cuboid":
+        initial_pose.position[2] = move_cube._CUBOID_WIDTH / 2
+    else:
+        initial_pose.position[2] = move_cube._CUBE_WIDTH / 2
     theta = 0
     initial_pose.orientation = np.array([0, 0, np.sin(theta / 2), np.cos(theta / 2)])
-    initializer = initializers.DumbInitializer(difficulty, goal, initial_pose.to_dict())
+    initializer = initializers.DumbInitializer(
+        difficulty, goal, initial_pose.to_dict(), object_shape=object_shape
+    )
     if difficulty == 4:
         term_fn = termination_fns.stay_close_to_goal_level_4
     else:
@@ -63,12 +71,26 @@ def main():
         visualization=True,
         path=path,
         return_timestamp=True,
+        object_shape=object_shape,
     )
 
     goal_pose = move_cube.Pose.from_dict(goal)
-    policy = ImpedanceControllerPolicy(
-        env.action_space, initial_pose, goal_pose, difficulty=difficulty, save_path=path
-    )
+    if object_shape == "cuboid":
+        policy = CuboidImpedanceControllerPolicy(
+            action_space=env.action_space,
+            initial_pose=initial_pose,
+            goal_pose=goal_pose,
+            debug_waypoints=False,
+            difficulty=difficulty,
+        )
+    else:
+        policy = ImpedanceControllerPolicy(
+            env.action_space,
+            initial_pose,
+            goal_pose,
+            difficulty=difficulty,
+            save_path=path,
+        )
 
     observation = env.reset()
     policy.set_init_goal(
@@ -109,4 +131,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--difficulty", "--d", default=2, type=int)
+    parser.add_argument(
+        "--cube_goal_json",
+        "--g",
+        default="../rrc_package/goals/goal20.json",
+        type=str,
+    )
+    parser.add_argument("--object_shape", "--s", default="cube", type=str)
+    args = parser.parse_args()
+
+    main(args.difficulty, args.cube_goal_json, args.object_shape)

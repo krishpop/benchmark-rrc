@@ -8,8 +8,9 @@ MU = 0.5
 CUBE_WIDTH = 0.065
 CUBE_HALF_WIDTH = 0.0325
 CUBE_MASS = 0.08
-CUBOID_SIZE = np.array((0.065, 0.065, 0.065))
+CUBOID_SIZE = np.array((0.02, 0.08, 0.02)) * 2
 CUBOID_HALF_SIZE = CUBOID_SIZE / 2
+CUBOID_HALF_WIDTH = CUBOID_HALF_SIZE[0]
 CUBOID_MASS = 0.094
 VIRTUAL_CUBOID_HALF_SIZE = CUBOID_HALF_SIZE + 0.007
 MIN_HEIGHT = min(CUBOID_HALF_SIZE)
@@ -17,15 +18,25 @@ MAX_HEIGHT = move_cube._max_height
 ARENA_RADIUS = move_cube._ARENA_RADIUS
 AVG_POSE_STEPS = 200
 # INIT_JOINT_CONF = TriFingerPlatform.spaces.robot_position.default
-INIT_JOINT_CONF = np.array([0.0, 0.9, -2.0, 0.0, 0.9, -2.0, 0.0, 0.9, -2.0], dtype=np.float32)
-CONTRACTED_JOINT_CONF = np.array([0.0, 1.4, -2.4, 0.0, 1.4, -2.4, 0.0, 1.4, -2.4], dtype=np.float32)
-CLEARED_JOINT_CONF = np.array([0.0, 1.4, -0.6, 0.0, 1.4, -0.6, 0.0, 1.4, -0.6], dtype=np.float32)
+INIT_JOINT_CONF = np.array(
+    [0.0, 0.9, -2.0, 0.0, 0.9, -2.0, 0.0, 0.9, -2.0], dtype=np.float32
+)
+CONTRACTED_JOINT_CONF = np.array(
+    [0.0, 1.4, -2.4, 0.0, 1.4, -2.4, 0.0, 1.4, -2.4], dtype=np.float32
+)
+CLEARED_JOINT_CONF = np.array(
+    [0.0, 1.4, -0.6, 0.0, 1.4, -0.6, 0.0, 1.4, -0.6], dtype=np.float32
+)
 
-TMP_VIDEO_DIR = '/tmp/rrc_videos'
-CUSTOM_LOGDIR = '/output'  # only applicable when it is running on Singularity
+TMP_VIDEO_DIR = "/tmp/rrc_videos"
+CUSTOM_LOGDIR = "/output"  # only applicable when it is running on Singularity
 
-EXCEP_MSSG = "================= captured exception =================\n" + \
-    "{message}\n" + "{error}\n" + '=================================='
+EXCEP_MSSG = (
+    "================= captured exception =================\n"
+    + "{message}\n"
+    + "{error}\n"
+    + "=================================="
+)
 
 # colors
 TRANSLU_CYAN = (0, 1, 1, 0.4)

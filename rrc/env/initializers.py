@@ -11,7 +11,7 @@ from trifinger_simulation.tasks.move_cube import Pose
 from scipy.spatial.transform import Rotation
 from trifinger_simulation.tasks.move_cube import _ARENA_RADIUS, _max_height
 from rrc.mp.align_rotation import project_cube_xy_plane
-from rrc.mp.const import CUBE_HALF_WIDTH
+from rrc.mp.const import CUBE_HALF_WIDTH, CUBOID_HALF_WIDTH
 from rrc.mp.utils import sample_uniform_from_circle
 import numpy as np
 import random
@@ -21,12 +21,13 @@ import pickle as pkl
 class RandomInitializer:
     """Initializer that samples random initial states and goals."""
 
-    def __init__(self, difficulty):
+    def __init__(self, difficulty, object_shape="cube"):
         """Initialize.
         Args:
             difficulty (int):  Difficulty level for sampling goals.
         """
         self.difficulty = difficulty
+        self.object_shape = object_shape
 
     def get_initial_state(self):
         """Get a random initial object pose (always on the ground)."""
@@ -35,7 +36,8 @@ class RandomInitializer:
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
         goal = move_cube.sample_goal(difficulty=self.difficulty)
-        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        goal.position[-1] = max(goal.position[-1], width)
         return goal
 
 
@@ -101,7 +103,12 @@ class EvalEpisodesInitializer:
 
 
 class Task4SmallRotation:
-    def __init__(self, difficulty, orientation_error_threshold=np.pi / 2 * 0.5):
+    def __init__(
+        self,
+        difficulty,
+        orientation_error_threshold=np.pi / 2 * 0.5,
+        object_shape="cube",
+    ):
         if difficulty != 4:
             raise ValueError(
                 "Task4SmallRotation initializer should only be "
@@ -110,10 +117,13 @@ class Task4SmallRotation:
         self.difficulty = 4
         self.init = None
         self.orientation_error_threshold = orientation_error_threshold
+        self.object_shape = object_shape
 
     def get_initial_state(self):
         """Get a random initial object pose (always on the ground)."""
         self.init = move_cube.sample_goal(difficulty=-1)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        self.init.position[-1] = max(self.init.position[-1], width)
         return self.init
 
     def get_goal(self):
@@ -126,6 +136,9 @@ class Task4SmallRotation:
             # goal.position[:2] = self.init.position[:2]  # TEMP: align x and y
             ori_error = self._weighted_orientation_error(goal)
             # pos_error = self._weighted_position_error(goal)
+
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        goal.position[-1] = max(goal.position[-1], width)
         return goal
 
     def _weighted_orientation_error(self, goal):
@@ -148,15 +161,17 @@ class Task4SmallRotation:
 class TrainingInitializer:
     """Init in a tighter radius."""
 
-    def __init__(self, difficulty):
+    def __init__(self, difficulty, object_shape="cube"):
         self.difficulty = difficulty
         self.goal = None
+        self.object_shape = object_shape
 
     def get_initial_state(self):
         """Get a random initial object pose (always on the ground)."""
         init = move_cube.sample_goal(difficulty=-1)
         init.position[:2] = sample_uniform_from_circle(0.07)
-        init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        init.position[-1] = max(init.position[-1], width)
 
         if self.difficulty == 4:
             self.goal = move_cube.sample_goal(self.difficulty)
@@ -181,15 +196,17 @@ class TrainingInitializer:
                 self.goal = None
         else:
             goal = move_cube.sample_goal(difficulty=self.difficulty)
-        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        goal.position[-1] = max(goal.position[-1], width)
         return goal
 
 
 class CenteredInitializer:
     """Init in a tighter radius."""
 
-    def __init__(self, difficulty):
+    def __init__(self, difficulty, object_shape="cube"):
         self.difficulty = difficulty
+        self.object_shape = object_shape
 
     def get_initial_state(self):
         """Get a random initial object pose (always on the ground)."""
@@ -201,7 +218,8 @@ class CenteredInitializer:
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
         goal = move_cube.sample_goal(difficulty=self.difficulty)
-        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        goal.position[-1] = max(goal.position[-1], width)
         return goal
 
 
@@ -287,7 +305,13 @@ class FixedInitializer(RandomInitializer):
 
 
 class DumbInitializer(RandomInitializer):
-    def __init__(self, difficulty, default_goal=None, default_initial_state=None):
+    def __init__(
+        self,
+        difficulty,
+        default_goal=None,
+        default_initial_state=None,
+        object_shape="cube",
+    ):
         if default_goal is None:
             default_goal = {
                 "position": np.array([0, 0, CUBE_HALF_WIDTH]),
@@ -301,6 +325,7 @@ class DumbInitializer(RandomInitializer):
 
         self.default_goal = default_goal
         self.default_initial_state = default_initial_state
+        self.object_shape = object_shape
         super().__init__(difficulty)
 
     def get_initial_state(self):
@@ -308,12 +333,12 @@ class DumbInitializer(RandomInitializer):
             init = move_cube.Pose.from_dict(self.default_initial_state)
         else:
             init = super().get_initial_state()
-        # init.position[-1] = max(init.position[-1], CUBE_HALF_WIDTH)
         return init
 
     def get_goal(self):
         goal = move_cube.Pose.from_dict(self.default_goal)
-        goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
+        width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
+        goal.position[-1] = max(goal.position[-1], width)
         return goal
 
 

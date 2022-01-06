@@ -24,7 +24,6 @@ from typing import Callable, Union
 import cvxpy as cp
 import pybullet as p
 import pybullet_data
-import rrc.cic.control_main_class as cic_control_main_class
 import torch
 import trifinger_simulation
 from cvxpylayers.torch import CvxpyLayer
@@ -36,16 +35,14 @@ from rrc.env import fop
 from rrc.env.termination_fns import pos_and_rot_close_to_goal
 from rrc.mp.const import (
     CUBE_HALF_WIDTH,
+    CUBOID_HALF_WIDTH,
     CUBE_MASS,
     CUBE_WIDTH,
-    CUBOID_MASS,
     CUBOID_SIZE,
-    CUSTOM_LOGDIR,
     INIT_JOINT_CONF,
+    CUBOID_MASS,
 )
 from rrc_iprl_package.control import controller_utils_cube as c_utils
-from rrc_iprl_package.control.contact_point import ContactPoint
-from rrc_iprl_package.control.custom_pinocchio_utils import CustomPinocchioUtils
 from scipy.interpolate import interp1d
 from scipy.linalg import block_diag
 from scipy.spatial.transform import Rotation
@@ -1148,6 +1145,7 @@ class RobotCubeEnv(gym.GoalEnv):
         object_mass: float = 0.016,
         return_timestamp: bool = False,
         tip_positions_object_frame: bool = False,
+        object_shape: str = "cube",
     ):
         """Initialize.
 
@@ -1176,6 +1174,7 @@ class RobotCubeEnv(gym.GoalEnv):
             object_mass (float): set object mass to custom value
             return_timestamp (bool): returns cam0_timestamp with observation
             tip_positions_object_frame (bool): if true, observations contain tip positions in object frame
+            object_shape (str): cube or cuboid shape
         """
         # Basic initialization
         # ====================
@@ -1234,6 +1233,7 @@ class RobotCubeEnv(gym.GoalEnv):
         self.init_obj_pose = None  # needed for evaluation
         self.align_obj_error = -1  # needed for evaluation
         self.goal_list = []  # needed for multiple goal environments
+        self.object_shape = object_shape
         if self.visualization:
             self.cube_viz = Viz()
 
@@ -1339,31 +1339,131 @@ class RobotCubeEnv(gym.GoalEnv):
         if x >= 0.07:  # min_tip_dist limit
             self._min_tip_dist = x
 
-    def compute_reward(self, achieved_goal, desired_goal, info):
-        if not isinstance(info, dict):
-            p_obs = [d["p_obs"] for d in info]
-            obs = [d["obs"] for d in info]
-            for i, (p_d, d) in enumerate(zip(p_obs, obs)):
-                virtual_goal = desired_goal[i]
-                if not isinstance(desired_goal, dict):
-                    virtual_goal = {
-                        "position": virtual_goal[4:],
-                        "orientation": virtual_goal[:4],
-                    }
-                d["desired_goal"] = virtual_goal
-                p_d["desired_goal"] = virtual_goal
-            return np.array(
-                [self._compute_reward(p, o, i) for p, o, i in zip(p_obs, obs, info)]
+    def reset(self):
+        # By changing the `_reset_*` method below you can switch between using
+        # the platform frontend, which is needed for the submission system, and
+        # the direct simulation, which may be more convenient if you want to
+        # pre-train locally in simulation.
+        if self.simulation:
+            self._reset_direct_simulation()
+            cam_kwargs = dict(
+                cameraDistance=0.6,
+                cameraYaw=0,
+                cameraPitch=-40,
+                cameraTargetPosition=[0, 0, 0],
+            )
+            p.configureDebugVisualizer(
+                p.COV_ENABLE_GUI, 0, physicsClientId=self._pybullet_client_id
+            )
+            p.resetDebugVisualizerCamera(
+                **cam_kwargs, physicsClientId=self._pybullet_client_id
+            )
+            self._tip_dist_buffer.append(self._last_tip_dist)
+        else:
+            self._reset_platform_frontend()
+            self._reset_direct_simulation()
+        if self.visualization:
+            self.cube_viz.reset()
+
+        p.setGravity(
+            0,
+            0,
+            self._gravity,
+            physicsClientId=self.platform.simfinger._pybullet_client_id,
+        )
+
+        self.maybe_update_tip_dist()
+        self.step_count = 0
+
+        # need to already do one step to get initial observation
+        # TODO disable frameskip here?
+        self.prev_observation, _, _, _ = self.step(self.initial_action)
+        if self.path is not None:
+            self.set_reach_start()
+        return self.prev_observation
+
+    def _reset_platform_frontend(self):
+        """Reset the platform frontend."""
+        # reset is not really possible
+        if self.real_platform is not None:
+            raise RuntimeError("Once started, this environment cannot be reset.")
+
+        self.real_platform = robot_fingers.TriFingerPlatformFrontend()
+
+    def _reset_direct_simulation(self):
+        """Reset direct simulation.
+
+        With this the env can be used without backend.
+        """
+
+        # reset simulation
+        del self.platform
+
+        # initialize simulation
+        if self.initializer is None:
+            initial_object_pose = move_cube.sample_goal(difficulty=-1)
+        else:
+            initial_object_pose = self.initializer.get_initial_state()
+            cube_goal_pose = self.initializer.get_goal().to_dict()
+            self.goal = {
+                k: np.array(v, dtype=np.float32) for k, v in cube_goal_pose.items()
+            }
+
+        self.platform = trifinger_simulation.TriFingerPlatform(
+            visualization=self.visualization,
+            initial_object_pose=initial_object_pose,
+            time_step_s=self.time_step_s,
+            object_mass=self.object_mass,
+            shape=self.object_shape,
+        )
+        self.t_prev = 0
+        self._pybullet_client_id = self.platform.simfinger._pybullet_client_id
+        if self.visualization:
+            cam_kwargs = dict(
+                cameraDistance=0.6,
+                cameraYaw=0,
+                cameraPitch=-40,
+                cameraTargetPosition=[0, 0, 0],
+            )
+            p.configureDebugVisualizer(
+                p.COV_ENABLE_GUI, 0, physicsClientId=self._pybullet_client_id
+            )
+            p.resetDebugVisualizerCamera(
+                **cam_kwargs, physicsClientId=self._pybullet_client_id
+            )
+        if self.object_shape == "cube":
+            # use mass of real cube
+            p.changeDynamics(
+                bodyUniqueId=self.platform.cube.block,
+                linkIndex=-1,
+                physicsClientId=self.platform.simfinger._pybullet_client_id,
+                mass=CUBE_MASS,
             )
         else:
-            p_obs, obs = info["p_obs"], info["obs"]
-            if not isinstance(desired_goal, dict):
-                desired_goal = {
-                    "position": desired_goal[4:],
-                    "orientation": desired_goal[:4],
-                }
-            obs["desired_goal"] = desired_goal
-            return self._compute_reward(p_obs, obs, info)
+            p.changeDynamics(
+                bodyUniqueId=self.platform.cube.block,
+                linkIndex=-1,
+                physicsClientId=self.platform.simfinger._pybullet_client_id,
+                mass=CUBOID_MASS,
+            )
+
+        # p.setTimeStep(0.001)
+        # visualize the goal
+        if self.visualization:
+            if self.object_shape == "cube":
+                self.goal_marker = CubeMarker(
+                    width=CUBE_WIDTH,
+                    position=self.goal["position"],
+                    orientation=self.goal["orientation"],
+                    pybullet_client_id=self.platform.simfinger._pybullet_client_id,
+                )
+            elif self.object_shape == "cuboid":
+                self.goal_marker = CuboidMarker(
+                    size=CUBOID_SIZE,
+                    position=self.goal["position"],
+                    orientation=self.goal["orientation"],
+                    pybullet_client_id=self.platform.simfinger._pybullet_client_id,
+                )
 
     def step(self, action):
         """Run one timestep of the environment's dynamics.
@@ -1395,6 +1495,9 @@ class RobotCubeEnv(gym.GoalEnv):
         if not self.action_space.contains(action):
             raise ValueError("Given action is not contained in the action space.")
 
+        return self._step(action)
+
+    def _step(self, action):
         num_steps = self.frameskip
 
         # ensure episode length is not exceeded due to frameskip
@@ -1475,6 +1578,32 @@ class RobotCubeEnv(gym.GoalEnv):
 
         return deepcopy(observation), reward, is_done, info
 
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        if not isinstance(info, dict):
+            p_obs = [d["p_obs"] for d in info]
+            obs = [d["obs"] for d in info]
+            for i, (p_d, d) in enumerate(zip(p_obs, obs)):
+                virtual_goal = desired_goal[i]
+                if not isinstance(desired_goal, dict):
+                    virtual_goal = {
+                        "position": virtual_goal[4:],
+                        "orientation": virtual_goal[:4],
+                    }
+                d["desired_goal"] = virtual_goal
+                p_d["desired_goal"] = virtual_goal
+            return np.array(
+                [self._compute_reward(p, o, i) for p, o, i in zip(p_obs, obs, info)]
+            )
+        else:
+            p_obs, obs = info["p_obs"], info["obs"]
+            if not isinstance(desired_goal, dict):
+                desired_goal = {
+                    "position": desired_goal[4:],
+                    "orientation": desired_goal[:4],
+                }
+            obs["desired_goal"] = desired_goal
+            return self._compute_reward(p_obs, obs, info)
+
     def get_info_keys(self, info, obs, p_obs):
         info["ori_err"] = _orientation_error(obs)
         info["pos_err"] = _position_error(obs)
@@ -1495,49 +1624,6 @@ class RobotCubeEnv(gym.GoalEnv):
         }
         return info
 
-    def reset(self):
-        # By changing the `_reset_*` method below you can switch between using
-        # the platform frontend, which is needed for the submission system, and
-        # the direct simulation, which may be more convenient if you want to
-        # pre-train locally in simulation.
-        if self.simulation:
-            self._reset_direct_simulation()
-            cam_kwargs = dict(
-                cameraDistance=0.6,
-                cameraYaw=0,
-                cameraPitch=-40,
-                cameraTargetPosition=[0, 0, 0],
-            )
-            p.configureDebugVisualizer(
-                p.COV_ENABLE_GUI, 0, physicsClientId=self._pybullet_client_id
-            )
-            p.resetDebugVisualizerCamera(
-                **cam_kwargs, physicsClientId=self._pybullet_client_id
-            )
-            self._tip_dist_buffer.append(self._last_tip_dist)
-        else:
-            self._reset_platform_frontend()
-            self._reset_direct_simulation()
-        if self.visualization:
-            self.cube_viz.reset()
-
-        p.setGravity(
-            0,
-            0,
-            self._gravity,
-            physicsClientId=self.platform.simfinger._pybullet_client_id,
-        )
-
-        self.maybe_update_tip_dist()
-        self.step_count = 0
-
-        # need to already do one step to get initial observation
-        # TODO disable frameskip here?
-        self.prev_observation, _, _, _ = self.step(self.initial_action)
-        if self.path is not None:
-            self.set_reach_start()
-        return self.prev_observation
-
     def maybe_update_tip_dist(self):
         if (
             len(self._tip_dist_buffer) == 10
@@ -1551,71 +1637,6 @@ class RobotCubeEnv(gym.GoalEnv):
 
         self.steps_since_contact = 0
         return
-
-    def _reset_platform_frontend(self):
-        """Reset the platform frontend."""
-        # reset is not really possible
-        if self.real_platform is not None:
-            raise RuntimeError("Once started, this environment cannot be reset.")
-
-        self.real_platform = robot_fingers.TriFingerPlatformFrontend()
-
-    def _reset_direct_simulation(self):
-        """Reset direct simulation.
-
-        With this the env can be used without backend.
-        """
-
-        # reset simulation
-        del self.platform
-
-        # initialize simulation
-        if self.initializer is None:
-            initial_object_pose = move_cube.sample_goal(difficulty=-1)
-        else:
-            initial_object_pose = self.initializer.get_initial_state()
-            cube_goal_pose = self.initializer.get_goal().to_dict()
-            self.goal = {
-                k: np.array(v, dtype=np.float32) for k, v in cube_goal_pose.items()
-            }
-
-        self.platform = trifinger_simulation.TriFingerPlatform(
-            visualization=self.visualization,
-            initial_object_pose=initial_object_pose,
-            time_step_s=self.time_step_s,
-            object_mass=self.object_mass,
-        )
-        self.t_prev = 0
-        self._pybullet_client_id = self.platform.simfinger._pybullet_client_id
-        if self.visualization:
-            cam_kwargs = dict(
-                cameraDistance=0.6,
-                cameraYaw=0,
-                cameraPitch=-40,
-                cameraTargetPosition=[0, 0, 0],
-            )
-            p.configureDebugVisualizer(
-                p.COV_ENABLE_GUI, 0, physicsClientId=self._pybullet_client_id
-            )
-            p.resetDebugVisualizerCamera(
-                **cam_kwargs, physicsClientId=self._pybullet_client_id
-            )
-        # use mass of real cube
-        p.changeDynamics(
-            bodyUniqueId=self.platform.cube.block,
-            linkIndex=-1,
-            physicsClientId=self.platform.simfinger._pybullet_client_id,
-            mass=CUBE_MASS,
-        )
-        # p.setTimeStep(0.001)
-        # visualize the goal
-        if self.visualization:
-            self.goal_marker = CuboidMarker(
-                size=CUBOID_SIZE,
-                position=self.goal["position"],
-                orientation=self.goal["orientation"],
-                pybullet_client_id=self.platform.simfinger._pybullet_client_id,
-            )
 
     def seed(self, seed=None):
         """Sets the seed for this env’s random number generator.
@@ -1829,7 +1850,7 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         episode_length: int = move_cube.episode_length,
         path: str = None,
         cone_approx: bool = False,
-        force_factor: float = 0.5,
+        force_factor: float = 1.0,
         torque_factor: float = 0.1,
         integral_control_freq: float = 10,
         ki: float = 0.1,
@@ -1912,6 +1933,7 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         self.robot_torque_space = robot_torque_space
         self.wrench_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
         self.action_space = self.wrench_space
+        # initial action in torque space, not wrench space
         self.initial_action = np.zeros(9)
         self.cp_params = None
         self.contact_viz = None
@@ -1962,10 +1984,9 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
     def step(self, action):
         action[:3] *= self.force_factor
         action[3:] *= self.torque_factor
-        self.action_space = self.robot_torque_space
         for step in range(self.integral_control_freq):
             torque, des_tip_forces = self.action(action, step)
-            obs, rew, done, info = super(RobotWrenchCubeEnv, self).step(torque)
+            obs, rew, done, info = self._step(torque)
             self.update_contact_state(des_tip_forces)
             if self.debug and self.visualization:
                 self.visualize_forces(
@@ -1983,7 +2004,6 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
                 done = True
             if done:
                 break
-        self.action_space = self.wrench_space
         return obs, rew, done, info
 
     def action(self, des_wrench, step=0):
@@ -2219,8 +2239,8 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         # x_goal = x_goal.reshape((3, 3))
         # delta_x = [des_wrench[:3] for _ in zip(current_ft_pos, current_ft_pos)]
         torque = 0
-        Kp = np.array([20, 20, 40, 20, 20, 40, 20, 20, 40]) * 20
-        Kv = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]) * 10
+        Kp = np.array([200, 200, 400, 200, 200, 400, 200, 200, 400])
+        Kv = np.array([7.0, 7.0, 8.0, 7.0, 7.0, 8.0, 7.0, 7.0, 8.0]) * 0.1
 
         if self.use_impedance:
             torque = c_utils.impedance_controller(
@@ -2238,16 +2258,16 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             for fid in range(3):
                 delta_x = np.expand_dims(ft_pos_goal_list[fid] - current_ft_pos[fid], 1)
                 Ji = tip_jacobians[fid]
+                tip_force = np.expand_dims(tip_forces_wf[fid], 1)
                 torque += self.compute_torque_single_finger(
-                    tip_forces_wf[fid], fid, delta_x, delta_dx[fid], Ji
+                    tip_force, fid, delta_x, delta_dx[fid], Ji
                 )
-        torque = np.clip(torque, self.action_space.low, self.action_space.high)
         return torque
 
     def compute_torque_single_finger(
         self, tip_force_wf, finger_id, delta_x, delta_dx, Ji
     ):
-        Kp = [20, 20, 40, 20, 20, 40, 20, 20, 40]
+        Kp = np.array([20, 20, 40, 20, 20, 40, 20, 20, 40])
         Kv = np.array([0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7])
         # construct Kp matrix
         Kp_x = Kp[finger_id * 3 + 0]
@@ -2351,8 +2371,8 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
             dq,
             self.pinocchio_utils,
             tip_forces_wf=None,
-            kp=KP,
-            kv=KV,
+            Kp=KP,
+            Kv=KV,
             grav=self._gravity,
         )
         torque = np.clip(torque, self.action_space.low, self.action_space.high)
@@ -2367,26 +2387,20 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         tol=0.005,
     ):
         done = self.execute_pre_grasp(pre_grasp_ngrid)
-
         FT_RADIUS = 0.0075
         # get aligned cube pose in case of noisy observation
         obj_pose = move_cube.Pose.from_dict(self.prev_observation["achieved_goal"])
         self.cp_params = c_utils.get_lifting_cp_params(obj_pose)
         # obj_pose = c_utils.get_aligned_pose(obj_pose)
-
         # Get joint positions
         current_position = self.prev_observation["observation"]["position"]
-
         # Get current fingertip positions
         current_ft_pos = self.pinocchio_utils.forward_kinematics(current_position)
-
         # Get list of desired fingertip positions
         cp_wf_list = c_utils.get_cp_pos_wf_from_cp_params(
             self.cp_params, obj_pose.position, obj_pose.orientation
         )
-
         R_list = c_utils.get_ft_R(current_position)
-
         # Deal with None fingertip_goal here
         # If cp_wf is None, set ft_goal to be  current ft position
         for i in range(len(cp_wf_list)):
@@ -2398,66 +2412,28 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
                 ftip_radius_pos_offset = R @ np.array([0, 0, FT_RADIUS])
                 new_pos = np.array(cp_wf_list[i]) + ftip_radius_pos_offset[:3]
                 cp_wf_list[i] = new_pos
-
         ft_goal = np.asarray(cp_wf_list).flatten()
         # ft_goal += np.array([0, 0, 0.02] * 3)
+        gymlogger.debug("~~~~~~Executing Grasp~~~~~~")
+        gymlogger.debug(f"current_position {current_position}")
+        gymlogger.debug(f"ft_goal {ft_goal}")
         if self.use_traj_opt:
             dt = 0.01  # self.time_step_s * self.frameskip
             finger_nlp = c_utils.define_static_object_opt(grasp_ngrid, dt)
             ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
                 current_position, obj_pose, ft_goal, finger_nlp
             )
-
-            gymlogger.debug("~~~~~~Executing Grasp~~~~~~")
-            gymlogger.debug(f"current_position {current_position}")
-            gymlogger.debug(f"ft_goal {ft_goal}")
             gymlogger.debug(f"ft_pos_traj shape {ft_pos_traj.shape}")
-
             self.visualize_markers()
-            self.action_space = self.robot_torque_space
             done = self.execute_traj(ft_pos_traj, ft_vel_traj)
-            self.action_space = self.wrench_space
         else:
-            # using PinocchioUtils.inverse_kinematics, set to position control
-            self.action_type = ActionType.POSITION
-            self.action_space = self.observation_space["observation"]["position"]
-            # TODO: tol currently hardcoded to 0.001, make it smaller and a variable
-            ft_curr = np.concatenate(current_ft_pos)
-            goals = np.linspace(np.asarray(ft_curr), np.asarray(ft_goal), interp_n)
-
-            gymlogger.debug("~~~~~~Executing Grasp~~~~~~")
-            gymlogger.debug(f"current_position {current_position}")
-            gymlogger.debug(f"ft_goals {goals}")
-
-            i = 0
-            g = goals[i]
-            err = np.abs(g - np.concatenate(current_ft_pos))
-            done = False
-            while not done and i < len(goals) and self.step_count < 1000:
-                q = self.pinocchio_utils.inverse_kinematics_three_fingers(
-                    g, current_position
-                )
-                self.last_prev_observation = self.prev_observation
-                self.prev_observation, _, done, _ = super(
-                    RobotWrenchCubeEnv, self
-                ).step(q)
-                current_position = self.prev_observation["observation"]["position"]
-                current_ft_pos = self.pinocchio_utils.forward_kinematics(
-                    current_position
-                )
-                g = goals[i]
-                err = np.abs(g - np.concatenate(current_ft_pos))
-                if self.step_count % 50 == 0:
-                    gymlogger.debug(f"error to goal: {err}")
-                # only increment goal if errors are less than tolerance
-                i += np.all(err < tol)
-
-            self.action_type = ActionType.TORQUE
-            self.action_space = self.wrench_space
+            done = self.ik_move(
+                current_position, current_ft_pos, ft_goal, interp_n, tol, max_steps=1000
+            )
         gymlogger.debug("~~~~~~Done Executing Grasp~~~~~~")
         return done
 
-    def execute_pre_grasp(self, ngrid=6):
+    def execute_pre_grasp(self, ngrid=6, interp_n=10):
         # Get object positions
         obj_pose = move_cube.Pose.from_dict(self.prev_observation["achieved_goal"])
         self.cp_params = c_utils.get_lifting_cp_params(obj_pose)
@@ -2465,48 +2441,97 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
 
         # Get joint positions
         current_position = self.prev_observation["observation"]["position"]
-        current_ft_pos = self.pinocchio_utils.forward_kinematics(current_position)
+        current_ft_pos = self.prev_observation["observation"]["tip_positions"]
+        # height = CUBOID_HALF_WIDTH + 0.001
         ft_goal = c_utils.get_pre_grasp_ft_goal(
             obj_pose, current_ft_pos, self.cp_params
         )
-        gymlogger.debug("~~~~~~Executing Pre-Grasp~~~~~~")
+        ft_pre_goal = ft_goal.copy().reshape((3, 3))  # + np.array([0., 0., height])
+        # reposition fingertips while keeping height dim of fingertips
+        ft_pre_goal[:, -1] = current_ft_pos[:, -1]
+        ft_pre_goal = ft_pre_goal.flatten()
+        gymlogger.debug("~~~~~~Executing Pre-Grasp Align~~~~~~")
+        gymlogger.debug(f"ft_pre_goal:{ft_pre_goal}")
         gymlogger.debug(f"ft_goal:{ft_goal}")
 
-        # if self.use_traj_opt:
-        #     dt = 0.01  # self.time_step_s * self.frameskip
-        #     release_nlp = c_utils.define_static_object_opt(ngrid, dt)
-        #     ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
-        #         current_position, obj_pose, ft_goal, release_nlp
-        #     )
-        #     self.visualize_markers()
-        #     self.action_space = self.robot_torque_space
-        #     done = self.execute_traj(ft_pos_traj, ft_vel_traj)
-        #     self.action_space = self.wrench_space
-        # else:
-        # using PinocchioUtils.inverse_kinematics, set to position control
-        self.action_type = ActionType.POSITION
-        self.action_space = self.observation_space["observation"]["position"]
-
-        # TODO: tol currently hardcoded to 0.01, make it smaller and a variable
-        err = np.abs(ft_goal - np.concatenate(current_ft_pos))
-        tol = 0.005
-        start = self.step_count
-        done = False
-
-        while not done:
-            q = self.pinocchio_utils.inverse_kinematics_three_fingers(
-                ft_goal, current_position
+        if self.use_traj_opt:
+            dt = 0.01  # self.time_step_s * self.frameskip
+            release_nlp = c_utils.define_static_object_opt(ngrid, dt)
+            ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
+                current_position, obj_pose, ft_pre_goal, release_nlp
             )
             self.visualize_markers()
-            self.last_prev_observation = self.prev_observation
-            self.prev_observation, _, done, _ = super(RobotWrenchCubeEnv, self).step(q)
-            done = done or np.all(err < tol) or self.step_count >= start + 500
+            self.action_space = self.robot_torque_space
+            done = self.execute_traj(ft_pos_traj, ft_vel_traj)
+            gymlogger.debug("~~~~~~Executing Pre-Grasp Reach~~~~~~")
+            release_nlp = c_utils.define_static_object_opt(ngrid, dt)
             current_position = self.prev_observation["observation"]["position"]
-            current_ft_pos = self.pinocchio_utils.forward_kinematics(current_position)
-            err = np.abs(ft_goal - np.concatenate(current_ft_pos))
+            current_ft_pos = self.prev_observation["observation"]["tip_positions"]
+            ft_pos_traj, ft_vel_traj = self.run_finger_traj_opt(
+                current_position, obj_pose, ft_goal, release_nlp
+            )
+            self.visualize_markers()
+            done = self.execute_traj(ft_pos_traj, ft_vel_traj)
+        else:
+            # TODO: tol currently hardcoded to 0.01, make it smaller and a variable
+            done = self.ik_move(
+                current_position,
+                current_ft_pos,
+                ft_pre_goal,
+                interp_n,
+                tol=0.005,
+                max_steps=500,
+            )
+            gymlogger.debug("~~~~~~Executing Pre-Grasp Reach~~~~~~")
+            current_position = self.prev_observation["observation"]["position"]
+            current_ft_pos = self.prev_observation["observation"]["tip_positions"]
+            done = self.ik_move(
+                current_position,
+                current_ft_pos,
+                ft_goal,
+                interp_n,
+                tol=0.005,
+                max_steps=500,
+            )
+        return done
 
+    def ik_move(
+        self,
+        current_position,
+        current_ft_pos,
+        ft_goal,
+        interp_n,
+        tol=0.005,
+        max_steps=500,
+    ):
+        # using PinocchioUtils.inverse_kinematics, set to position control
+        self.action_type = ActionType.POSITION
+        # TODO: tol currently hardcoded to 0.001, make it smaller and a variable
+        ft_curr = np.concatenate(current_ft_pos)
+        goals = np.linspace(np.asarray(ft_curr), np.asarray(ft_goal), interp_n)
+        i = 0
+        g = goals[i]
+        err = np.abs(g - np.concatenate(current_ft_pos))
+        done = False
+        for step in range(max_steps):
+            q = self.pinocchio_utils.inverse_kinematics_three_fingers(
+                g, current_position
+            )
+            self.last_prev_observation = self.prev_observation
+            self.prev_observation, _, _, _ = super(RobotWrenchCubeEnv, self)._step(q)
+            current_position = self.prev_observation["observation"]["position"]
+            current_ft_pos = self.prev_observation["observation"]["tip_positions"]
+            err = np.abs(g - np.concatenate(current_ft_pos))
+            if self.step_count % 50 == 0:
+                gymlogger.debug(f"error to goal: {err}")
+            # only increment goal if errors are less than tolerance
+            ik_succ = np.all(err < tol)
+            i += ik_succ
+            if i == len(goals):
+                done = True
+                break
+            g = goals[i]
         self.action_type = ActionType.TORQUE
-        self.action_space = self.wrench_space
         return done
 
     def execute_traj(self, ft_pos_traj, ft_vel_traj):
@@ -2533,12 +2558,14 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
                 Kv=KV,
                 grav=self._gravity,
             )
-            torque = np.clip(torque, self.action_space.low, self.action_space.high)
+            torque = np.clip(
+                torque, self.robot_torque_space.low, self.robot_torque_space.high
+            )
             if self.step_count % 50 == 0:
                 gymlogger.debug(f"ft_pos_goal_list: {ft_pos_goal_list}")
                 gymlogger.debug(f"torque: {torque}")
             self.last_prev_observation = self.prev_observation
-            self.prev_observation, _, done, _ = super(RobotWrenchCubeEnv, self).step(
+            self.prev_observation, _, done, _ = super(RobotWrenchCubeEnv, self)._step(
                 torque
             )
             self.visualize_markers()

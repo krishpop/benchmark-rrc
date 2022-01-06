@@ -5,7 +5,6 @@ import numpy as np
 import pybullet as p
 from rrc.env import cube_env, initializers, wrappers
 from rrc.mp.const import CUBE_HALF_WIDTH, CUBE_WIDTH
-from rrc_iprl_package.envs import cube_env as iprl_cube_env
 
 
 def test_cube_env(
@@ -19,6 +18,8 @@ def test_cube_env(
     visualization,
     use_actual_cp,
     gravity,
+    impedance,
+    traj_opt,
 ):
     if logdir:
         path = osp.join(osp.split(osp.abspath(__file__))[0], logdir)
@@ -50,21 +51,21 @@ def test_cube_env(
     if env == "real":
         env = cube_env.RobotWrenchCubeEnv(
             dict(position=[0, 0, 0.05], orientation=[0, 0, 0, 1]),
-            1,
+            2,
             ki=ki,
             gravity=gravity,
             integral_control_freq=int_freq,
             visualization=visualization,
             initializer=init,
             debug=True,
-            use_traj_opt=True,
+            use_traj_opt=traj_opt,
             path=path,
             force_factor=1.0,
             torque_factor=0.1,
             episode_length=5000,
             use_actual_cp=use_actual_cp,
         )
-        env.use_impedance = False
+        env.use_impedance = impedance
     elif env == "hog":
         env = cube_env.ContactForceWrenchCubeEnv(
             dict(position=[0, 0, 0.05], orientation=[0, 0, 0, 1]),
@@ -98,7 +99,9 @@ def test_cube_env(
 
 
 def test_iprl_cube_env():
-    env = iprl_cube_env.RobotCubeEnv()
+    from rrc_iprl_package.envs.cube_env import RobotCubeEnv
+
+    env = RobotCubeEnv()
     return env
 
 
@@ -113,6 +116,8 @@ def main(
     visualization,
     use_actual_cp,
     gravity,
+    impedance,
+    traj_opt,
 ):
     if policy == "lift":
         ac = np.array([0, 0, 0.75, 0, 0, 0])
@@ -145,6 +150,8 @@ def main(
         visualization,
         use_actual_cp,
         gravity,
+        impedance,
+        traj_opt,
     )
 
 
@@ -163,7 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--kd", default=1.0, type=float)
     parser.add_argument("--use_cp", action="store_true")
     parser.add_argument("--gravity", default=-9.81, type=float)
-
+    parser.add_argument("--impedance", action="store_true")
+    parser.add_argument("--traj_opt", action="store_true")
     args = parser.parse_args()
     pd_kwargs = dict(Kp=args.kp, Kd=args.kd)
     main(
@@ -177,4 +185,6 @@ if __name__ == "__main__":
         args.visualization,
         args.use_cp,
         args.gravity,
+        args.impedance,
+        args.traj_opt,
     )

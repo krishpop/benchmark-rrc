@@ -11,13 +11,18 @@ def main(n_episodes=40, visualization=True, use_traj_opt=False):
         env_cls="robot_wrench_env",
         visualization=visualization,
         flatten_goal=False,
+        debug=True,
         use_traj_opt=use_traj_opt,
     )()
     dists = []
     grasp_succ = []
-    obj_poses = []
+    # obj_poses = []
     for _i in range(n_episodes):
         obs = env.reset()
+        for r in range(2000):
+            env.execute_simple_traj(
+                r, obs["observation"]["position"], obs["observation"]["velocity"]
+            )
         obj_pose = Pose.from_dict(env.prev_observation["achieved_goal"])
         cp_list = env.get_cp_wf_list(env.cp_params, obj_pose)
         dist = env.prev_observation["observation"]["tip_positions"] - np.asarray(
@@ -27,15 +32,15 @@ def main(n_episodes=40, visualization=True, use_traj_opt=False):
         print("Distance to desired contact points:\n", dist)
         print("L2 distance:\n", np.linalg.norm(dist))
         # grasp_succ = np.linalg.norm(dist) < 0.05
-        grasp_success = int(input("Grasp success: "))
-        grasp_succ.append(grasp_success)
-        obj_poses.append(obs["achieved_goal"])
+        # grasp_success = int(input("Grasp success: "))
+        # grasp_succ.append(grasp_success)
+        # obj_poses.append(obs["achieved_goal"])
     print(np.mean(grasp_succ))
-    np.savez(
-        open(
-            "grasp_success.npz", grasp_succ=grasp_succ, obj_poses=obj_poses, dists=dists
-        )
-    )
+    # np.savez(
+    #     open(
+    #         "grasp_success.npz", grasp_succ=grasp_succ, obj_poses=obj_poses, dists=dists
+    #     )
+    # )
 
 
 if __name__ == "__main__":
