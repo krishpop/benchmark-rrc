@@ -7,10 +7,12 @@ import cv2
 import gym
 import numpy as np
 import pybullet as p
+from collections import OrderedDict
 from gym import ObservationWrapper
 from gym.spaces import flatten_space
 from rrc.env.cube_env import Action, ActionType
 from rrc.env.env_utils import PolicyMode
+from rrc.env import cube_env
 from scipy.spatial.transform import Rotation
 from stable_baselines3.common.monitor import Monitor
 from trifinger_simulation import TriFingerPlatform, camera, trifingerpro_limits
@@ -507,7 +509,9 @@ class FlattenGoalObs(ObservationWrapper):
     def __init__(self, env, observation_keys):
         super().__init__(env)
         obs_space = self.env.observation_space
-        obs_dict = {k: flatten_space(obs_space[k]) for k in observation_keys}
+        obs_dict = OrderedDict(
+            [(k, flatten_space(obs_space[k])) for k in observation_keys]
+        )
         self.observation_space = gym.spaces.Dict(obs_dict)
 
     def observation(self, obs):
@@ -848,3 +852,28 @@ class HierarchicalPolicyWrapper(ObservationWrapper):
         )
         object_pose = move_cube.Pose(position=pos, orientation=ori)
         return goal_pose, object_pose
+
+
+class WrenchPolicyWrapper(ObservationWrapper):
+    def __init__(self, env):
+        assert isinstance(
+            env.unwrapped, cube_env.RobotWrenchCubeEnv
+        ), "env expects type CubeEnv or RobotWrenchCubeEnv"
+        super(WrenchPolicyWrapper, self).__init__(env)
+
+        self.observation_space["observation"].spaces["cp_list"] = gym.spaces.Box(
+            low=np.concatenate([trifingerpro_limits.object_position.low, np.zeros(4)]),
+            high=np.concatenate([trifingerpro_limits.object_position.high, np.ones(4)]),
+        )
+
+    def observation(self, observation):
+        obj_pose = move_cube.Pose.from_dict(observation["achieved_goal"])
+        observation["observation"]["cp_list"] = np.array(
+            [
+                np.concatenate(x)
+                for x in self.get_cp_of_list(
+                    self.env.cp_params, obj_pose, self.env.use_actual_cp
+                )
+            ]
+        )
+        return observation

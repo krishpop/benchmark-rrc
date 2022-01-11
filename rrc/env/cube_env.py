@@ -1411,6 +1411,7 @@ class RobotCubeEnv(gym.GoalEnv):
 
         self.platform = trifinger_simulation.TriFingerPlatform(
             visualization=self.visualization,
+            initial_robot_position=INIT_JOINT_CONF,
             initial_object_pose=initial_object_pose,
             time_step_s=self.time_step_s,
             object_mass=self.object_mass,
@@ -1933,7 +1934,7 @@ class RobotWrenchCubeEnv(RobotCubeEnv):
         self.robot_torque_space = robot_torque_space
         self.wrench_space = gym.spaces.Box(low=-np.ones(6), high=np.ones(6))
         self.action_space = self.wrench_space
-        # initial action in torque space, not wrench space
+        # initial action in torque space
         self.initial_action = np.zeros(9)
         self.cp_params = None
         self.contact_viz = None

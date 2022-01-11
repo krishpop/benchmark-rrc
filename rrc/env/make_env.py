@@ -186,6 +186,7 @@ def env_fn_generator(
     initializer=None,
     residual=False,
     env_cls=None,
+    wrench_policy=False,
     flatten_goal=True,
     scale=None,
     action_type=None,
@@ -263,10 +264,11 @@ def env_fn_generator(
             env = wrappers.MonitorPyBulletWrapper(env, save_dir, save_freq)
         # elif env_kwargs.get("visualization", False):
         #    env = wrappers.PyBulletClearGUIWrapper(env)
+        if wrench_policy:
+            env = wrappers.WrenchPolicyWrapper(env)
         if flatten_goal:
-            env = wrappers.FlattenGoalObs(
-                env, ["desired_goal", "achieved_goal", "observation"]
-            )
+            keys = ["desired_goal", "achieved_goal", "observation"]
+            env = wrappers.FlattenGoalObs(env, keys)
         if monitor:
             env = wrappers.Monitor(env, info_keywords=info_keywords)
         return env
