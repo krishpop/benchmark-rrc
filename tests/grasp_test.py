@@ -1,9 +1,12 @@
 import os
 import os.path as osp
-
+import shelve
 import numpy as np
 import pybullet as p
-from rrc.env import cube_env, initializers, wrappers
+from rrc.env import initializers, wrappers, viz_utils
+
+# from rrc.env import cube_env_old as cube_env
+from rrc.env import cube_env
 from rrc.mp.const import CUBE_HALF_WIDTH, CUBE_WIDTH
 
 
@@ -17,9 +20,9 @@ def test_cube_env(
     logdir,
     visualization,
     use_actual_cp,
-    gravity,
     impedance,
     traj_opt,
+    object_shape="cube",
 ):
     if logdir:
         path = osp.join(osp.split(osp.abspath(__file__))[0], logdir)
@@ -33,27 +36,17 @@ def test_cube_env(
             position=np.array([-CUBE_WIDTH * 0.6, -CUBE_WIDTH * 0.6, CUBE_HALF_WIDTH]),
             orientation=np.array([0, 0, 0, 1]),
         )
-        if gravity == 0.0:
-            print("Setting initial cube position to 1.5*cube_half_width")
-            default_init = dict(
-                position=np.array(
-                    [-CUBE_WIDTH * 0.0, -CUBE_WIDTH * 0.0, 3 * CUBE_HALF_WIDTH]
-                ),
-                orientation=np.array([0, 0, 0, 1]),
-            )
-        else:
-            default_init = None
+        default_init = None
         init = initializers.dumb_init(
             1, default_goal=default_goal, default_initial_state=default_init
         )
     else:
-        init = initializers.dumb_init(1)
+        init = initializers.fixed_init(2)
     if env == "real":
         env = cube_env.RobotWrenchCubeEnv(
             dict(position=[0, 0, 0.05], orientation=[0, 0, 0, 1]),
             2,
             ki=ki,
-            gravity=gravity,
             integral_control_freq=int_freq,
             visualization=visualization,
             initializer=init,
@@ -62,10 +55,11 @@ def test_cube_env(
             path=path,
             force_factor=1.0,
             torque_factor=0.1,
-            episode_length=5000,
+            episode_length=1000,
             use_actual_cp=use_actual_cp,
+            use_impedance=impedance,
+            object_shape=object_shape,
         )
-        env.use_impedance = impedance
     elif env == "hog":
         env = cube_env.ContactForceWrenchCubeEnv(
             dict(position=[0, 0, 0.05], orientation=[0, 0, 0, 1]),
@@ -83,19 +77,51 @@ def test_cube_env(
         env = wrappers.ResidualPDWrapper(env, **pd_kwargs)
     env = wrappers.PyBulletClearGUIWrapper(env)
     obs = env.reset()
-    if gravity == 0.0:
-        env.gravity = -9.81
-        p.setGravity(
-            0, 0, -9.81, physicsClientId=env.platform.simfinger._pybullet_client_id
-        )
     d = False
+    dxs, ddxs, ft_vels, ft_poss = [], [], [], []
     while not d:
         # q = obs["observation"]["position"]
         # dq = obs["observation"]["velocity"]
-        ac = policy(obs)
+        ac = policy(obs).copy()
         obs, r, d, i = env.step(ac)
+        delta_x = ac[:3]
+        q_curr = env.prev_observation["observation"]["position"]
+        dq_curr = env.prev_observation["observation"]["velocity"]
+        current_ft_pos = env.prev_observation["observation"]["tip_positions"]
+        des_wrench = ac * np.concatenate([env.force_factor, [env.torque_factor] * 3])
+        ft_pos, ft_vel, delta_dx, _ = env.get_ft_pos_vel_goals(
+            q_curr, dq_curr, current_ft_pos, des_wrench
+        )
+        dxs.append(delta_x)
+        ddxs.append(delta_dx)
+        ft_vels.append(ft_vel)
+        ft_poss.append(ft_pos)
         # env.step(env.action_space.sample())
         # env.execute_simple_traj(env.step_count * np.pi / 10, q, dq)
+    ft_wf_traj = np.asarray(ft_poss).reshape(-1, 9)
+    dx_traj = np.asarray(ddxs)
+    ft_vel_traj = np.asarray(ft_vels)
+    x_traj = np.asarray(dxs)
+    np.savez(
+        "test_ki_{}{}.npz".format(ki, int_freq),
+        ft_wf_traj=ft_wf_traj,
+        dx_traj=dx_traj,
+        ft_vel_traj=ft_vel_traj,
+        x_traj=x_traj,
+    )
+    env.save_custom_logs()
+    data = extract_data(
+        osp.join(env.path, "custom_data"), keys=["des_tip_forces", "obs_tip_forces"]
+    )
+    viz_utils.plot_3f_des_obs_data(data["des_tip_forces"], data["obs_tip_forces"])
+    # d0 = np.load(osp.join(osp.split(osp.abspath(__file__))[0], "test.npz"))
+    # viz_utils.plot_3f_des_obs_data(d0["ft_wf_traj"], ft_wf_traj, title="ft_pos_wf")
+
+
+def extract_data(filepath, keys):
+    with shelve.open(filepath) as f:
+        data = {k: [np.array(d["data"]).flatten() for d in f[k]] for k in keys}
+    return data
 
 
 def test_iprl_cube_env():
@@ -115,12 +141,12 @@ def main(
     pd_kwargs,
     visualization,
     use_actual_cp,
-    gravity,
     impedance,
     traj_opt,
+    object_shape,
 ):
     if policy == "lift":
-        ac = np.array([0, 0, 0.75, 0, 0, 0])
+        ac = np.array([0, 0, 0.9, 0, 0, 0])
         pol = lambda obs: ac
     elif policy == "up":
         ac = np.array([0, 1.0, 0, 0, 0, 0])
@@ -149,9 +175,9 @@ def main(
         logdir,
         visualization,
         use_actual_cp,
-        gravity,
         impedance,
         traj_opt,
+        object_shape,
     )
 
 
@@ -169,9 +195,9 @@ if __name__ == "__main__":
     parser.add_argument("--kp", default=10.0, type=float)
     parser.add_argument("--kd", default=1.0, type=float)
     parser.add_argument("--use_cp", action="store_true")
-    parser.add_argument("--gravity", default=-9.81, type=float)
     parser.add_argument("--impedance", action="store_true")
     parser.add_argument("--traj_opt", action="store_true")
+    parser.add_argument("--object", default="cube")
     args = parser.parse_args()
     pd_kwargs = dict(Kp=args.kp, Kd=args.kd)
     main(
@@ -184,7 +210,7 @@ if __name__ == "__main__":
         pd_kwargs,
         args.visualization,
         args.use_cp,
-        args.gravity,
         args.impedance,
         args.traj_opt,
+        object_shape=args.object,
     )

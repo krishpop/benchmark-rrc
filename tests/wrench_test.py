@@ -114,7 +114,8 @@ def main():
             use_relaxed=False,
             force_factor=0.5,
             torque_factor=0.1,
-            object_frame=True,
+            object_frame=False,
+            debug=True,
             initializer=initializers.fixed_init(
                 1,
                 default_initial_state=dict(
@@ -124,10 +125,10 @@ def main():
         )
     )
 
-    x_ac = np.array([1, 0, 0, 0, 0, 0])
-    xy_ac = np.array([0, 1, 0, 0, 0, 0])
-    y_ac = np.array([0, 0, 1, 0, 0, 0])
-    z_ac = np.array([0, 0, 0.5, 0, 0, 0])
+    x_ac = np.array([1.0, 0, 0, 0, 0, 0])
+    xy_ac = np.array([1.0, 1, 0, 0, 0, 0])
+    y_ac = np.array([0, 1.0, 0, 0, 0, 0])
+    z_ac = np.array([0, 0, 1.0, 0, 0, 0])
     acs = [
         x_ac,
         -x_ac,
@@ -142,10 +143,8 @@ def main():
         -z_ac / 2,
     ]
 
-    get_action = lambda i: acs[i // 50 % len(acs)]
-    get_action = lambda i: np.clip(
-        env.action_space.sample() + np.array([0, 0, 0.5, 0, 0, 0]), -1, 1
-    )
+    # get_action = lambda i: acs[i // 50 % len(acs)]
+    get_action = lambda i: np.clip(np.array([0, 0, 0.1, 0, 0, 0]), -1, 1)
 
     obs = env.reset()  # camera_kwargs=cam_kwargs)
     last_face = get_face_from_obs(obs)
@@ -156,6 +155,8 @@ def main():
         ac = get_action(i)
         if i % 50 == 0:
             print(f"Wrench: {ac}")
+            net_wrench = np.array([0, 0, 0.08 * -9.81, 0, 0, 0]) + ac
+            print(f"Net Wrench: {net_wrench}")
         i += 1
         obs, r, d, info = env.step(ac)
         new_face = get_face_from_obs(obs)

@@ -281,12 +281,17 @@ class FixedGoalInitializer(RandomInitializer):
 
 class FixedInitializer(RandomInitializer):
     def __init__(self, difficulty, default_goal=None, default_initial_state=None):
-        if default_goal is None:
+        if default_goal is None and difficulty != 2:
             default_goal = {
                 "position": np.array([0, 0, CUBE_HALF_WIDTH]),
                 "orientation": np.array([0, 0, 0, 1]),
             }
         self.default_goal = default_goal
+        if default_initial_state is None:
+            default_initial_state = {
+                "position": np.array([0, 0, CUBE_HALF_WIDTH]),
+                "orientation": np.array([0, 0, 0, 1]),
+            }
         self.default_initial_state = default_initial_state
         super().__init__(difficulty)
 
@@ -299,7 +304,10 @@ class FixedInitializer(RandomInitializer):
         return init
 
     def get_goal(self):
-        goal = move_cube.Pose.from_dict(self.default_goal)
+        if self.default_goal is not None:
+            goal = move_cube.Pose.from_dict(self.default_goal)
+        else:
+            goal = super().get_goal()
         goal.position[-1] = max(goal.position[-1], CUBE_HALF_WIDTH)
         return goal
 

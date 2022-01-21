@@ -27,7 +27,7 @@ class ForceOptProblem:
         obj_mu=1.0,
         mass=0.016,
         gravity=-9.81,
-        target_n=0.1,
+        target_n=1.0,
         cone_approx=False,
         object_frame=False,
     ):
@@ -58,7 +58,7 @@ class ForceOptProblem:
         outputs = [self.L]
         # self.Cm = cp.Parameter((6, 3), value=cm*self.mass, name='com')
 
-        f_g = np.array([0, 0, self.gravity])
+        f_g = np.array([0, 0, -self.gravity])
         if self.object_frame:
             self.R_w_2_o = cp.Parameter((6, 6), name="r_w_2_o")
             w_ext = self.W + self.R_w_2_o @ cm @ f_g
@@ -95,7 +95,7 @@ class ForceOptProblem:
         fnum = len(cp_list_of)
         H = self._get_H_matrix(fnum)
         for cp_pos_ori in cp_list_of:
-            if cp_pos_ori is not None:
+            if not np.all(cp_pos_ori == -1):
                 GT_i = self._get_grasp_matrix_single_cp(cp_pos_ori, obj_pose)
                 GT_list.append(GT_i)
             else:
@@ -119,8 +119,9 @@ class ForceOptProblem:
         R = rot.as_matrix()
         R_bar = block_diag(R, R)
 
-        G = P @ R_bar
-        return G.T
+        # G = P @ R_bar
+        GT = R_bar.T @ P.T
+        return GT
 
     def _get_P_matrix(self, cp_pos, obj_pose):
         quat_o_2_w = obj_pose[3:]
@@ -157,11 +158,11 @@ class ForceOptProblem:
             weight = (
                 R_w_2_o
                 @ np.vstack([np.eye(3) * self.mass, np.zeros((3, 3))])
-                @ np.array([0, 0, self._gravity])
+                @ np.array([0, 0, -self.gravity])
             )
         else:
             weight = np.vstack([np.eye(3), np.zeros((3, 3))]) @ np.array(
-                [0, 0, self.gravity * self.mass]
+                [0, 0, -self.gravity * self.mass]
             )
         G = self.get_grasp_matrix(cp_list_of, obj_pose)
         w_ext = des_wrench + weight
