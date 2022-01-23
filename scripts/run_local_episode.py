@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """Run a single episode with a controller in simulation."""
 import argparse
+import numpy as np
 
-from env.make_env import make_env
+from rrc.combined_code import create_state_machine
+from rrc.env.make_env import make_env
+from rrc.mp.utils import set_seed
 from trifinger_simulation.tasks import move_cube
-from mp.utils import set_seed
-from combined_code import create_state_machine
 
 
-def _init_env(goal_pose_dict, difficulty):
+def _init_env(goal_pose_dict, difficulty, episode_length, method):
     eval_config = {
-        'action_space': 'torque_and_position',
-        'frameskip': 3,
-        'reward_fn': 'competition_reward',
-        'termination_fn': 'no_termination',
-        'initializer': 'random_init',
-        'monitor': False,
-        'visualization': True,
-        'sim': True,
-        'rank': 0
+        "action_space": "torque_and_position",
+        "frameskip": 3,
+        "reward_fn": "competition_reward",
+        "termination_fn": "no_termination",
+        "initializer": "centered_init",
+        "monitor": False,
+        "visualization": True,
+        "sim": True,
+        "path": "./output/{}".format(method),
+        "rank": 0,
+        "episode_length": int(episode_length),
+        "real": True,
     }
 
     set_seed(0)
@@ -27,23 +31,35 @@ def _init_env(goal_pose_dict, difficulty):
 
 
 def main():
-    parser = argparse.ArgumentParser('args')
-    parser.add_argument('difficulty', type=int)
-    parser.add_argument('method', type=str, help="The method to run. One of 'mp-pg', 'cic-cg', 'cpc-tg'")
-    parser.add_argument('--residual', default=False, action='store_true',
-                        help="add to use residual policies. Only compatible with difficulties 3 and 4.")
-    parser.add_argument('--bo', default=False, action='store_true',
-                        help="add to use BO optimized parameters.")
+    parser = argparse.ArgumentParser("args")
+    parser.add_argument("difficulty", type=int)
+    parser.add_argument(
+        "method", type=str, help="The method to run. One of 'mp-pg', 'cic-cg', 'cpc-tg'"
+    )
+    parser.add_argument(
+        "--residual",
+        default=False,
+        action="store_true",
+        help="add to use residual policies. Only compatible with difficulties 3 and 4.",
+    )
+    parser.add_argument(
+        "--bo",
+        default=False,
+        action="store_true",
+        help="add to use BO optimized parameters.",
+    )
+    parser.add_argument("--episode_length", "--ep_len", default=2000)
     args = parser.parse_args()
     goal_pose = move_cube.sample_goal(args.difficulty)
     goal_pose_dict = {
-        'position': goal_pose.position.tolist(),
-        'orientation': goal_pose.orientation.tolist()
+        "position": goal_pose.position.tolist(),
+        "orientation": goal_pose.orientation.tolist(),
     }
 
-    env = _init_env(goal_pose_dict, args.difficulty)
-    state_machine = create_state_machine(args.difficulty, args.method, env,
-                                         args.residual, args.bo)
+    env = _init_env(goal_pose_dict, args.difficulty, args.episode_length, args.method)
+    state_machine = create_state_machine(
+        args.difficulty, args.method, env, args.residual, args.bo
+    )
 
     #####################
     # Run state machine
@@ -54,7 +70,7 @@ def main():
     done = False
     while not done:
         action = state_machine(obs)
-        obs, _, done, _ = env.step(action)
+        obs, r, done, _ = env.step(action)
 
 
 if __name__ == "__main__":

@@ -3,22 +3,24 @@
 import argparse
 import json
 
-from env.make_env import make_env
-from mp.utils import set_seed
-from combined_code import create_state_machine
+from rrc.combined_code import create_state_machine
+from rrc.env.make_env import make_env
+from rrc.mp.utils import set_seed
 
 
 def _init_env(goal_pose_json, difficulty):
     eval_config = {
-        'action_space': 'torque_and_position',
-        'frameskip': 3,
-        'reward_fn': 'competition_reward',
-        'termination_fn': 'no_termination',
-        'initializer': 'random_init',
-        'monitor': False,
-        'visualization': False,
-        'sim': False,
-        'rank': 0
+        "action_space": "torque_and_position",
+        "frameskip": 3,
+        "reward_fn": "competition_reward",
+        "termination_fn": "stay_close_to_goal",
+        "initializer": "random_init",
+        "monitor": False,
+        "path": "./output",
+        "visualization": True,
+        "sim": True,
+        "rank": 0,
+        "real": True,
     }
 
     set_seed(0)
@@ -28,19 +30,30 @@ def _init_env(goal_pose_json, difficulty):
 
 
 def main():
-    parser = argparse.ArgumentParser('args')
-    parser.add_argument('difficulty', type=int)
-    parser.add_argument('goal_pose_json', type=str)
-    parser.add_argument('method', type=str, help="The method to run. One of 'mp-pg', 'cic-cg', 'cpc-tg'")
-    parser.add_argument('--residual', default=False, action='store_true',
-                        help="add to use residual policies. Only compatible with difficulties 3 and 4.")
-    parser.add_argument('--bo', default=False, action='store_true',
-                        help="add to use BO optimized parameters.")
+    parser = argparse.ArgumentParser("args")
+    parser.add_argument("difficulty", type=int)
+    parser.add_argument("goal_pose_json", type=str)
+    parser.add_argument(
+        "method", type=str, help="The method to run. One of 'mp-pg', 'cic-cg', 'cpc-tg'"
+    )
+    parser.add_argument(
+        "--residual",
+        default=False,
+        action="store_true",
+        help="add to use residual policies. Only compatible with difficulties 3 and 4.",
+    )
+    parser.add_argument(
+        "--bo",
+        default=False,
+        action="store_true",
+        help="add to use BO optimized parameters.",
+    )
     args = parser.parse_args()
 
     env = _init_env(args.goal_pose_json, args.difficulty)
-    state_machine = create_state_machine(args.difficulty, args.method, env,
-                                         args.residual, args.bo)
+    state_machine = create_state_machine(
+        args.difficulty, args.method, env, args.residual, args.bo
+    )
 
     #####################
     # Run state machine
