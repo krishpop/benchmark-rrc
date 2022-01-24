@@ -1,2 +1,2 @@
-from .residual_sac import ResidualSAC
-from .make_training_env import make_training_env
+from rrc.residual_learning.residual_sac import ResidualSAC
+from rrc.residual_learning.make_training_env import make_training_env

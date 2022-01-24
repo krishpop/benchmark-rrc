@@ -7,17 +7,24 @@ import pickle as pkl
 import gym
 import numpy as np
 
-import robot_interfaces
-import robot_fingers
+try:
+    import robot_fingers
+    from robot_interfaces.trifinger import Action
+except ImportError:
+    from trifinger_simulation.action import Action
+
+    print("ROS packages not imported")
+    robot_fingers = None
+
 import trifinger_simulation
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation.tasks import move_cube
-from mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
+from rrc.mp.const import CUSTOM_LOGDIR, INIT_JOINT_CONF, CUBOID_SIZE, CUBOID_MASS
 import pybullet as p
 
-from .reward_fns import competition_reward
-from .pinocchio_utils import PinocchioUtils
-from .viz import Viz, CuboidMarker
+from rrc.env.reward_fns import competition_reward
+from rrc.env.pinocchio_utils import PinocchioUtils
+from rrc.env.viz import Viz, CuboidMarker
 import time
 
 
@@ -71,7 +78,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
         """
         # Basic initialization
         # ====================
-        self.path=path
+        self.path = path
 
         self._compute_reward = reward_fn
         self._termination_fn = termination_fn if sim else None
@@ -99,13 +106,13 @@ class RealRobotCubeEnv(gym.GoalEnv):
         self.custom_logs = {}
         self.reward_list = []
         self.observation_list = []
-        self.change_goal_last = -1 # needed for evaluation
-        self.reach_finish_point = -1 # needed for evaluation
-        self.reach_start_point = -1 # needed for evaluation
-        self.init_align_obj_error = -1 # needed for evaluation
-        self.init_obj_pose = None # needed for evaluation
-        self.align_obj_error = -1 # needed for evaluation
-        self.goal_list = [] # needed for multiple goal environments
+        self.change_goal_last = -1  # needed for evaluation
+        self.reach_finish_point = -1  # needed for evaluation
+        self.reach_start_point = -1  # needed for evaluation
+        self.init_align_obj_error = -1  # needed for evaluation
+        self.init_obj_pose = None  # needed for evaluation
+        self.align_obj_error = -1  # needed for evaluation
+        self.goal_list = []  # needed for multiple goal environments
         if self.visualization:
             self.cube_viz = Viz()
 
@@ -147,7 +154,9 @@ class RealRobotCubeEnv(gym.GoalEnv):
             self.initial_action = trifingerpro_limits.robot_torque.default
         elif self.action_type == ActionType.POSITION:
             self.action_space = robot_position_space
-            self.initial_action = INIT_JOINT_CONF  # trifingerpro_limits.robot_position.default
+            self.initial_action = (
+                INIT_JOINT_CONF  # trifingerpro_limits.robot_position.default
+            )
         elif self.action_type == ActionType.TORQUE_AND_POSITION:
             self.action_space = gym.spaces.Dict(
                 {
@@ -157,7 +166,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             )
             self.initial_action = {
                 "torque": trifingerpro_limits.robot_torque.default,
-                "position": INIT_JOINT_CONF  # trifingerpro_limits.robot_position.default,
+                "position": INIT_JOINT_CONF,  # trifingerpro_limits.robot_position.default,
             }
         else:
             raise ValueError("Invalid action_type")
@@ -171,10 +180,11 @@ class RealRobotCubeEnv(gym.GoalEnv):
                         "torque": robot_torque_space,
                         "tip_positions": gym.spaces.Box(
                             low=np.array([trifingerpro_limits.object_position.low] * 3),
-                            high=np.array([trifingerpro_limits.object_position.high] * 3),
+                            high=np.array(
+                                [trifingerpro_limits.object_position.high] * 3
+                            ),
                         ),
-                        "tip_force": gym.spaces.Box(low=np.zeros(3),
-                                                    high=np.ones(3))
+                        "tip_force": gym.spaces.Box(low=np.zeros(3), high=np.ones(3)),
                     }
                 ),
                 "action": self.action_space,
@@ -215,9 +225,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             raise RuntimeError("platform is not instantiated.")
 
         if not self.action_space.contains(action):
-            raise ValueError(
-                "Given action is not contained in the action space."
-            )
+            raise ValueError("Given action is not contained in the action space.")
 
         num_steps = self.frameskip
 
@@ -243,9 +251,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
             if self.prev_observation is None:
                 self.prev_observation = observation
             reward += self._compute_reward(
-                self.prev_observation,
-                observation,
-                self.info
+                self.prev_observation, observation, self.info
             )
             self.prev_observation = observation
 
@@ -260,21 +266,21 @@ class RealRobotCubeEnv(gym.GoalEnv):
 
         # report current step_count
         if self.step_count - self._prev_step_report > 200:
-            print('current step_count:', self.step_count)
+            print("current step_count:", self.step_count)
             self._prev_step_report = self.step_count
 
         if is_done:
-            print('is_done is True. Episode terminates.')
-            print('episode length', self.episode_length)
-            print('step_count', self.step_count)
+            print("is_done is True. Episode terminates.")
+            print("episode length", self.episode_length)
+            print("step_count", self.step_count)
             self.save_custom_logs()
 
         if self.visualization:
             self.cube_viz.update_cube_orientation(
-                observation['achieved_goal']['position'],
-                observation['achieved_goal']['orientation'],
-                observation['desired_goal']['position'],
-                observation['desired_goal']['orientation']
+                observation["achieved_goal"]["position"],
+                observation["achieved_goal"]["orientation"],
+                observation["desired_goal"]["position"],
+                observation["desired_goal"]["orientation"],
             )
             time.sleep(0.01)
 
@@ -306,9 +312,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
         """Reset the platform frontend."""
         # reset is not really possible
         if self.real_platform is not None:
-            raise RuntimeError(
-                "Once started, this environment cannot be reset."
-            )
+            raise RuntimeError("Once started, this environment cannot be reset.")
 
         self.real_platform = robot_fingers.TriFingerPlatformFrontend()
 
@@ -332,9 +336,12 @@ class RealRobotCubeEnv(gym.GoalEnv):
             initial_object_pose=initial_object_pose,
         )
         # use mass of real cube
-        p.changeDynamics(bodyUniqueId=self.platform.cube.block, linkIndex=-1,
-                         physicsClientId=self.platform.simfinger._pybullet_client_id,
-                         mass=CUBOID_MASS)
+        p.changeDynamics(
+            bodyUniqueId=self.platform.cube.block,
+            linkIndex=-1,
+            physicsClientId=self.platform.simfinger._pybullet_client_id,
+            mass=CUBOID_MASS,
+        )
         # p.setTimeStep(0.001)
         # visualize the goal
         if self.visualization:
@@ -380,7 +387,9 @@ class RealRobotCubeEnv(gym.GoalEnv):
                 "position": robot_observation.position,
                 "velocity": robot_observation.velocity,
                 "torque": robot_observation.torque,
-                "tip_positions": np.array(self.pinocchio_utils.forward_kinematics(robot_observation.position)),
+                "tip_positions": np.array(
+                    self.pinocchio_utils.forward_kinematics(robot_observation.position)
+                ),
                 "tip_force": robot_observation.tip_force,
             },
             "action": action,
@@ -395,25 +404,21 @@ class RealRobotCubeEnv(gym.GoalEnv):
     def _set_sim_state(self, obs):
         # set cube position & orientation
         self.platform.cube.set_state(
-            obs['achieved_goal']['position'],
-            obs['achieved_goal']['orientation']
+            obs["achieved_goal"]["position"], obs["achieved_goal"]["orientation"]
         )
         # set robot position & velocity
         self.platform.simfinger.reset_finger_positions_and_velocities(
-            obs['robot']['position'],
-            obs['robot']['velocity']
+            obs["robot"]["position"], obs["robot"]["velocity"]
         )
 
     def _gym_action_to_robot_action(self, gym_action):
         # construct robot action depending on action type
         if self.action_type == ActionType.TORQUE:
-            robot_action = robot_interfaces.trifinger.Action(torque=gym_action)
+            robot_action = Action(torque=gym_action)
         elif self.action_type == ActionType.POSITION:
-            robot_action = robot_interfaces.trifinger.Action(
-                position=gym_action
-            )
+            robot_action = Action(position=gym_action)
         elif self.action_type == ActionType.TORQUE_AND_POSITION:
-            robot_action = robot_interfaces.trifinger.Action(
+            robot_action = Action(
                 torque=gym_action["torque"], position=gym_action["position"]
             )
         else:
@@ -423,51 +428,50 @@ class RealRobotCubeEnv(gym.GoalEnv):
 
     def register_custom_log(self, name, data):
         if name in self.custom_logs:
-            self.custom_logs[name].append({
-                'step_count': self.step_count,
-                'data': data
-            })
+            self.custom_logs[name].append({"step_count": self.step_count, "data": data})
         else:
-            self.custom_logs[name] = [{
-                'step_count': self.step_count,
-                'data': data
-            }]
+            self.custom_logs[name] = [{"step_count": self.step_count, "data": data}]
 
     def save_custom_logs(self):
-        print('saving custom logs...')
+        print("saving custom logs...")
         custom_logdir = None
-        if not(self.path is None):
+        if not (self.path is None):
             custom_logdir = self.path
         elif not os.path.isdir(CUSTOM_LOGDIR):
-            print('{} does not exist. skip saving custom logs.'.format(CUSTOM_LOGDIR))
+            print("{} does not exist. skip saving custom logs.".format(CUSTOM_LOGDIR))
             return
         else:
             custom_logdir = CUSTOM_LOGDIR
-        path = os.path.join(custom_logdir, 'custom_data')
+        path = os.path.join(custom_logdir, "custom_data")
         with shelve.open(path, writeback=True) as f:
             for key, val in self.custom_logs.items():
                 f[key] = val
 
         # save the rewards
-        path = os.path.join(custom_logdir, 'reward.pkl')
-        with open(path, 'wb') as handle:
-            pkl.dump(self.reward_list,handle)
+        path = os.path.join(custom_logdir, "reward.pkl")
+        with open(path, "wb") as handle:
+            pkl.dump(self.reward_list, handle)
 
         # if ran in simulation save the observation
-        if (self.simulation):
-            path = os.path.join(custom_logdir, 'observations.pkl')
-            with open(path, 'wb') as handle:
-                pkl.dump(self.observation_list,handle)
+        if self.simulation:
+            path = os.path.join(custom_logdir, "observations.pkl")
+            with open(path, "wb") as handle:
+                pkl.dump(self.observation_list, handle)
 
         # store the goal to a file, i.e. the last goal,...
         import json
+
         goal_file = os.path.join(custom_logdir, "goal.json")
         goal_info = {
             "difficulty": self.difficulty,
-            "goal": json.loads(json.dumps({
-        'position': self.goal["position"].tolist(),
-        'orientation': self.goal["orientation"].tolist(),
-        })),
+            "goal": json.loads(
+                json.dumps(
+                    {
+                        "position": self.goal["position"].tolist(),
+                        "orientation": self.goal["orientation"].tolist(),
+                    }
+                )
+            ),
             "changegoal": self.change_goal_last,
             "reachstart": self.reach_start_point,
             "reachfinish": self.reach_finish_point,
@@ -479,19 +483,19 @@ class RealRobotCubeEnv(gym.GoalEnv):
             json.dump(goal_info, fh, indent=4)
 
     def set_goal(self, pos=None, orientation=None, log_timestep=True):
-        ex_state = move_cube.sample_goal(difficulty=-1) # ensures that on the ground
-        if not(pos is None):
+        ex_state = move_cube.sample_goal(difficulty=-1)  # ensures that on the ground
+        if not (pos is None):
             self.goal["position"] = ex_state.position
             self.goal["position"][:3] = pos[:3]
-        if not(orientation is None):
+        if not (orientation is None):
             self.goal["orientation"] = ex_state.orientation
             self.goal["orientation"] = orientation
 
-        if (self.visualization):
+        if self.visualization:
             self.cube_viz.goal_viz = None
 
-        if (log_timestep):
-            if (self.simulation):
+        if log_timestep:
+            if self.simulation:
                 self.change_goal_last = self.platform.get_current_timeindex()
             else:
                 self.change_goal_last = self.real_platform.get_current_timeindex()
@@ -500,7 +504,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
         from .reward_fns import _orientation_error
 
         # simply set the reach finish timestep
-        if (self.simulation):
+        if self.simulation:
             timeidx = self.platform.get_current_timeindex()
         else:
             timeidx = self.real_platform.get_current_timeindex()
@@ -509,6 +513,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
 
     def set_reach_finish(self):
         from .reward_fns import _orientation_error
+
         obs, timeidx = self._get_obs_with_timeidx()
         self.align_obj_error = _orientation_error(obs)
         self.reach_finish_point = timeidx
@@ -516,10 +521,15 @@ class RealRobotCubeEnv(gym.GoalEnv):
     def set_reach_start(self):
         import json
         from .reward_fns import _orientation_error
+
         obs, timeidx = self._get_obs_with_timeidx()
         self.init_align_obj_error = _orientation_error(obs)
-        self.init_obj_pose = json.loads(json.dumps({
-            'position': obs['achieved_goal']['position'].tolist(),
-            'orientation': obs['achieved_goal']['orientation'].tolist(),
-        }))
+        self.init_obj_pose = json.loads(
+            json.dumps(
+                {
+                    "position": obs["achieved_goal"]["position"].tolist(),
+                    "orientation": obs["achieved_goal"]["orientation"].tolist(),
+                }
+            )
+        )
         self.reach_start_point = timeidx

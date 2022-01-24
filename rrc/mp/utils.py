@@ -3,12 +3,13 @@ import numpy as np
 import pybullet as p
 from scipy.spatial.transform import Rotation
 import time
-from mp.align_rotation import get_yaw_diff
+from rrc.mp.align_rotation import get_yaw_diff
 
 
 def set_seed(seed=0):
     import random
     import numpy as np
+
     random.seed(seed)
     np.random.seed(seed)
 
@@ -44,10 +45,10 @@ def get_rotation_between_vecs(v1, v2):
 
 # ref: https://en.wikipedia.org/wiki/Slerp
 def slerp(v0, v1, t_array):
-    '''This performs Spherical linear interpolation.
+    """This performs Spherical linear interpolation.
     v0 and v1 are quaternions.
     ex: slerp([1,0,0,0], [0,0,0,1], np.arange(0, 1, 0.001))
-    '''
+    """
     t_array = np.array(t_array)
     v0 = np.array(v0)
     v1 = np.array(v1)
@@ -59,7 +60,7 @@ def slerp(v0, v1, t_array):
 
     DOT_THRESHOLD = 0.9995
     if dot > DOT_THRESHOLD:
-        result = v0[np.newaxis,:] + t_array[:,np.newaxis] * (v1 - v0)[np.newaxis,:]
+        result = v0[np.newaxis, :] + t_array[:, np.newaxis] * (v1 - v0)[np.newaxis, :]
         return (result.T / np.linalg.norm(result, axis=1)).T
 
     theta_0 = np.arccos(dot)
@@ -70,7 +71,9 @@ def slerp(v0, v1, t_array):
 
     s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
     s1 = sin_theta / sin_theta_0
-    return (s0[:,np.newaxis] * v0[np.newaxis,:]) + (s1[:,np.newaxis] * v1[np.newaxis,:])
+    return (s0[:, np.newaxis] * v0[np.newaxis, :]) + (
+        s1[:, np.newaxis] * v1[np.newaxis, :]
+    )
 
 
 class Transform(object):
@@ -90,11 +93,13 @@ class Transform(object):
 
     def adjoint(self):
         def _skew(p):
-            return np.array([
-                [0, -p[2], p[1]],
-                [p[2], 0, -p[0]],
-                [-p[1], p[0], 0],
-            ])
+            return np.array(
+                [
+                    [0, -p[2], p[1]],
+                    [p[2], 0, -p[0]],
+                    [-p[1], p[0], 0],
+                ]
+            )
 
         adj = np.zeros((6, 6))
         adj[:3, :3] = self.R
@@ -133,36 +138,37 @@ class Transform(object):
             return x
 
 
-def is_valid_action(action, action_type='position'):
+def is_valid_action(action, action_type="position"):
     from trifinger_simulation.trifinger_platform import TriFingerPlatform
+
     spaces = TriFingerPlatform.spaces
 
-    if action_type == 'position':
+    if action_type == "position":
         action_space = spaces.robot_position
-    elif action_type == 'torque':
+    elif action_type == "torque":
         action_space = spaces.robot_position
 
     return (action_space.low <= action).all() and (action <= action_space.high).all()
 
 
 def repeat(sequence, num_repeat=3):
-    '''
+    """
     [1,2,3] with num_repeat = 3  --> [1,1,1,2,2,2,3,3,3]
-    '''
+    """
     return list(e for e in sequence for _ in range(num_repeat))
 
 
 def ease_out(sequence, in_rep=1, out_rep=5):
-    '''
+    """
     create "ease out" motion where an action is repeated for *out_rep* times at the end.
-    '''
-    in_seq_length = len(sequence[:-len(sequence) // 3])
-    out_seq_length = len(sequence[-len(sequence) // 3:])
+    """
+    in_seq_length = len(sequence[: -len(sequence) // 3])
+    out_seq_length = len(sequence[-len(sequence) // 3 :])
     x = [0, out_seq_length - 1]
     rep = [in_rep, out_rep]
     out_repeats = np.interp(list(range(out_seq_length)), x, rep).astype(int).tolist()
 
-    #in_repeats = np.ones(in_seq_length).astype(int).tolist()
+    # in_repeats = np.ones(in_seq_length).astype(int).tolist()
     in_repeats = np.ones(in_seq_length) * in_rep
     in_repeats = in_repeats.astype(int).tolist()
     repeats = in_repeats + out_repeats
@@ -175,9 +181,10 @@ def ease_out(sequence, in_rep=1, out_rep=5):
 
 
 class keep_state:
-    '''
+    """
     A Context Manager that preserves the state of the simulator
-    '''
+    """
+
     def __init__(self, env):
         self.finger_id = env.platform.simfinger.finger_id
         self.joints = env.platform.simfinger.pybullet_link_indices
@@ -192,9 +199,7 @@ class keep_state:
 
 
 def get_body_state(body_id):
-    position, orientation = p.getBasePositionAndOrientation(
-        body_id
-    )
+    position, orientation = p.getBasePositionAndOrientation(body_id)
     velocity = p.getBaseVelocity(body_id)
     return list(position), list(orientation), list(velocity)
 
@@ -217,7 +222,11 @@ class AssertNoStateChanges:
         self.finger_links = env.platform.simfinger.pybullet_link_indices
 
     def __enter__(self):
-        from pybullet_planning.interfaces.robots.joint import get_joint_velocities, get_joint_positions
+        from pybullet_planning.interfaces.robots.joint import (
+            get_joint_velocities,
+            get_joint_positions,
+        )
+
         org_obj_pos, org_obj_ori, org_obj_vel = get_body_state(self.cube_id)
         self.org_obj_pos = org_obj_pos
         self.org_obj_ori = org_obj_ori
@@ -227,7 +236,11 @@ class AssertNoStateChanges:
         self.org_joint_vel = get_joint_velocities(self.finger_id, self.finger_links)
 
     def __exit__(self, type, value, traceback):
-        from pybullet_planning.interfaces.robots.joint import get_joint_velocities, get_joint_positions
+        from pybullet_planning.interfaces.robots.joint import (
+            get_joint_velocities,
+            get_joint_positions,
+        )
+
         obj_pos, obj_ori, obj_vel = get_body_state(self.cube_id)
         np.testing.assert_array_almost_equal(self.org_obj_pos, obj_pos)
         np.testing.assert_array_almost_equal(self.org_obj_ori, obj_ori)
@@ -243,12 +256,14 @@ class AssertNoStateChanges:
 def complete_joint_configs(start, goal, unit_rad=0.008):
     start = np.asarray(start)
     goal = np.asarray(goal)
-    assert start.shape == goal.shape == (9, )
+    assert start.shape == goal.shape == (9,)
 
     max_diff = max(goal - start)
 
     num_keypoints = int(max_diff / unit_rad)
-    joint_configs = [start + (goal - start) * i / num_keypoints for i in range(num_keypoints)]
+    joint_configs = [
+        start + (goal - start) * i / num_keypoints for i in range(num_keypoints)
+    ]
     return joint_configs
 
 
@@ -264,13 +279,14 @@ def sample_uniform_from_circle(radius):
         y = radius * np.sin(theta)
 
         return x, y
+
     return np.asarray(random_xy(radius))
 
 
 def filter_none_elements(joint_conf_sequence):
-    '''
+    """
     This function removes None in the sequence, and also returns indices that correspond to non-None elements
-    '''
+    """
     valid_indices = []
     valid_joint_confs = []
     for idx, jconf in enumerate(joint_conf_sequence):
@@ -292,7 +308,7 @@ class SphereMarker:
             position: Position (x, y, z)
             orientation: Orientation as quaternion (x, y, z, w)
             color: Color of the cube as a tuple (r, b, g, q)
-            """
+        """
         self.shape_id = p.createVisualShape(
             shapeType=p.GEOM_SPHERE,
             radius=radius,
@@ -311,9 +327,7 @@ class SphereMarker:
             position: Position (x, y, z)
         """
         orientation = [0, 0, 0, 1]
-        p.resetBasePositionAndOrientation(
-            self.body_id, position, orientation
-        )
+        p.resetBasePositionAndOrientation(self.body_id, position, orientation)
 
     def __del__(self):
         """

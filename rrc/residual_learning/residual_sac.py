@@ -16,7 +16,7 @@ from dl.rl.envs import VecFrameStack, VecEpisodeLogger
 def soft_target_update(target_net, net, tau):
     """Soft update totarget network."""
     for tp, p in zip(target_net.parameters(), net.parameters()):
-        tp.data.copy_((1. - tau) * tp.data + tau * p.data)
+        tp.data.copy_((1.0 - tau) * tp.data + tau * p.data)
 
 
 class ResidualSACActor(object):
@@ -31,7 +31,9 @@ class ResidualSACActor(object):
         self.t = 0
 
     def should_take_zero_action(self):
-        lim = (self.t - self.learning_starts) / (self.policy_zero_end - self.learning_starts)
+        lim = (self.t - self.learning_starts) / (
+            self.policy_zero_end - self.learning_starts
+        )
         return np.random.rand() >= lim
 
     def __call__(self, obs):
@@ -41,25 +43,26 @@ class ResidualSACActor(object):
             if self.zero_action is None:
                 with torch.no_grad():
                     self.zero_action = nest.map_structure(
-                                        torch.zeros_like, self.pi(obs).action)
-            return {'action': self.zero_action}
+                        torch.zeros_like, self.pi(obs).action
+                    )
+            return {"action": self.zero_action}
         else:
             ac = self.pi(obs).action
             with torch.no_grad():
                 ac_norm = ac.abs().mean().cpu().numpy()
-                logger.add_scalar('alg/residual_norm', ac_norm, self.t, time.time())
-            return {'action': self.pi(obs).action}
+                logger.add_scalar("alg/residual_norm", ac_norm, self.t, time.time())
+            return {"action": self.pi(obs).action}
 
     def state_dict(self):
         """State dict."""
-        return {'t': self.t}
+        return {"t": self.t}
 
     def load_state_dict(self, state_dict):
         """Load state dict."""
-        self.t = state_dict['t']
+        self.t = state_dict["t"]
 
 
-@gin.configurable(blacklist=['logdir'])
+@gin.configurable(blacklist=["logdir"])
 class ResidualSAC(Algorithm):
     """Residual SAC algorithm.
 
@@ -68,38 +71,40 @@ class ResidualSAC(Algorithm):
         2) output zero residual actions until policy learning starts.
     """
 
-    def __init__(self,
-                 logdir,
-                 env_fn,
-                 policy_fn,
-                 qf_fn,
-                 policy_training_start=10000,
-                 policy_zero_end=100000,
-                 q_reg_weight=0.0001,
-                 action_reg_weight=0.0001,
-                 nenv=1,
-                 optimizer=torch.optim.Adam,
-                 buffer_size=10000,
-                 frame_stack=1,
-                 learning_starts=1000,
-                 update_period=1,
-                 batch_size=256,
-                 policy_lr=1e-3,
-                 qf_lr=1e-3,
-                 gamma=0.99,
-                 target_update_period=1,
-                 policy_update_period=1,
-                 target_smoothing_coef=0.005,
-                 alpha=0.2,
-                 automatic_entropy_tuning=True,
-                 target_entropy=None,
-                 gpu=True,
-                 eval_num_episodes=1,
-                 record_num_episodes=1,
-                 log_period=1000):
+    def __init__(
+        self,
+        logdir,
+        env_fn,
+        policy_fn,
+        qf_fn,
+        policy_training_start=10000,
+        policy_zero_end=100000,
+        q_reg_weight=0.0001,
+        action_reg_weight=0.0001,
+        nenv=1,
+        optimizer=torch.optim.Adam,
+        buffer_size=10000,
+        frame_stack=1,
+        learning_starts=1000,
+        update_period=1,
+        batch_size=256,
+        policy_lr=1e-3,
+        qf_lr=1e-3,
+        gamma=0.99,
+        target_update_period=1,
+        policy_update_period=1,
+        target_smoothing_coef=0.005,
+        alpha=0.2,
+        automatic_entropy_tuning=True,
+        target_entropy=None,
+        gpu=True,
+        eval_num_episodes=1,
+        record_num_episodes=1,
+        log_period=1000,
+    ):
         """Init."""
         self.logdir = logdir
-        self.ckptr = Checkpointer(os.path.join(logdir, 'ckpts'))
+        self.ckptr = Checkpointer(os.path.join(logdir, "ckpts"))
         self.env_fn = env_fn
         self.policy_training_start = policy_training_start
         self.policy_zero_end = policy_zero_end
@@ -118,17 +123,20 @@ class ResidualSAC(Algorithm):
             self.target_update_period = self.update_period
         else:
             self.target_update_period = target_update_period - (
-                                target_update_period % self.update_period)
+                target_update_period % self.update_period
+            )
         if policy_update_period < self.update_period:
             self.policy_update_period = self.update_period
         else:
             self.policy_update_period = policy_update_period - (
-                                policy_update_period % self.update_period)
+                policy_update_period % self.update_period
+            )
         self.target_smoothing_coef = target_smoothing_coef
         self.log_period = log_period
 
-        self.device = torch.device('cuda:0' if gpu and torch.cuda.is_available()
-                                   else 'cpu')
+        self.device = torch.device(
+            "cuda:0" if gpu and torch.cuda.is_available() else "cpu"
+        )
 
         self.env = VecEpisodeLogger(env_fn(nenv=nenv))
         if self.frame_stack > 1:
@@ -155,14 +163,17 @@ class ResidualSAC(Algorithm):
         self.target_qf2.load_state_dict(self.qf2.state_dict())
 
         self.buffer = ReplayBuffer(buffer_size, frame_stack)
-        self.actor = ResidualSACActor(self.pi, self.learning_starts,
-                                      self.policy_zero_end)
-        self.data_manager = ReplayBufferDataManager(self.buffer,
-                                                    self.env,
-                                                    self.actor,
-                                                    self.device,
-                                                    self.learning_starts,
-                                                    self.update_period)
+        self.actor = ResidualSACActor(
+            self.pi, self.learning_starts, self.policy_zero_end
+        )
+        self.data_manager = ReplayBufferDataManager(
+            self.buffer,
+            self.env,
+            self.actor,
+            self.device,
+            self.learning_starts,
+            self.update_period,
+        )
 
         self.alpha = alpha
         self.automatic_entropy_tuning = automatic_entropy_tuning
@@ -172,14 +183,16 @@ class ResidualSAC(Algorithm):
             else:
                 target_entropies = nest.map_structure(
                     lambda space: -np.prod(space.shape).item(),
-                    misc.unpack_space(self.env.action_space)
+                    misc.unpack_space(self.env.action_space),
                 )
                 self.target_entropy = sum(nest.flatten(target_entropies))
 
-            self.log_alpha = torch.tensor(np.log([self.alpha]),
-                                          requires_grad=True,
-                                          device=self.device,
-                                          dtype=torch.float32)
+            self.log_alpha = torch.tensor(
+                np.log([self.alpha]),
+                requires_grad=True,
+                device=self.device,
+                dtype=torch.float32,
+            )
             self.opt_alpha = optimizer([self.log_alpha], lr=policy_lr)
         else:
             self.target_entropy = None
@@ -192,10 +205,10 @@ class ResidualSAC(Algorithm):
 
     def loss(self, batch):
         """Loss function."""
-        pi_out = self.pi(batch['obs'], reparameterization_trick=True)
+        pi_out = self.pi(batch["obs"], reparameterization_trick=True)
         logp = pi_out.dist.log_prob(pi_out.action)
-        q1 = self.qf1(batch['obs'], batch['action']).value
-        q2 = self.qf2(batch['obs'], batch['action']).value
+        q1 = self.qf1(batch["obs"], batch["action"]).value
+        q2 = self.qf2(batch["obs"], batch["action"]).value
 
         # alpha loss
         should_update_policy = (
@@ -216,7 +229,7 @@ class ResidualSAC(Algorithm):
 
         # qf loss
         with torch.no_grad():
-            next_pi_out = self.pi(batch['next_obs'])
+            next_pi_out = self.pi(batch["next_obs"])
             next_ac = next_pi_out.action
             # Account for the fact that we are learning about the base policy
             # before we start updating the residual policy
@@ -224,10 +237,10 @@ class ResidualSAC(Algorithm):
                 next_ac = nest.map_structure(torch.zeros_like, next_ac)
             next_ac_logp = next_pi_out.dist.log_prob(next_ac)
 
-            q1_next = self.target_qf1(batch['next_obs'], next_ac).value
-            q2_next = self.target_qf2(batch['next_obs'], next_ac).value
+            q1_next = self.target_qf1(batch["next_obs"], next_ac).value
+            q2_next = self.target_qf2(batch["next_obs"], next_ac).value
             qnext = torch.min(q1_next, q2_next) - alpha * next_ac_logp
-            qtarg = batch['reward'] + (1.0 - batch['done']) * self.gamma * qnext
+            qtarg = batch["reward"] + (1.0 - batch["done"]) * self.gamma * qnext
 
         assert qtarg.shape == q1.shape
         assert qtarg.shape == q2.shape
@@ -237,8 +250,8 @@ class ResidualSAC(Algorithm):
         # pi loss
         pi_loss = None
         if should_update_policy:
-            q1_pi = self.qf1(batch['obs'], pi_out.action).value
-            q2_pi = self.qf2(batch['obs'], pi_out.action).value
+            q1_pi = self.qf1(batch["obs"], pi_out.action).value
+            q2_pi = self.qf2(batch["obs"], pi_out.action).value
             min_q_pi = torch.min(q1_pi, q2_pi)
             assert min_q_pi.shape == logp.shape
             pi_loss = (alpha * logp - min_q_pi).mean()
@@ -247,36 +260,44 @@ class ResidualSAC(Algorithm):
 
             # log pi loss about as frequently as other losses
             if self.t % self.log_period < self.policy_update_period:
-                logger.add_scalar('loss/pi', pi_loss, self.t, time.time())
+                logger.add_scalar("loss/pi", pi_loss, self.t, time.time())
 
         if self.t % self.log_period < self.update_period:
             if self.automatic_entropy_tuning:
-                logger.add_scalar('alg/log_alpha',
-                                  self.log_alpha.detach().cpu().numpy(), self.t,
-                                  time.time())
-                scalars = {"target": self.target_entropy,
-                           "entropy": -torch.mean(
-                                        logp.detach()).cpu().numpy().item()}
-                logger.add_scalars('alg/entropy', scalars, self.t, time.time())
+                logger.add_scalar(
+                    "alg/log_alpha",
+                    self.log_alpha.detach().cpu().numpy(),
+                    self.t,
+                    time.time(),
+                )
+                scalars = {
+                    "target": self.target_entropy,
+                    "entropy": -torch.mean(logp.detach()).cpu().numpy().item(),
+                }
+                logger.add_scalars("alg/entropy", scalars, self.t, time.time())
             else:
                 logger.add_scalar(
-                        'alg/entropy',
-                        -torch.mean(logp.detach()).cpu().numpy().item(),
-                        self.t, time.time())
-            logger.add_scalar('loss/qf1', qf1_loss, self.t, time.time())
-            logger.add_scalar('loss/qf2', qf2_loss, self.t, time.time())
-            logger.add_scalar('alg/qf1', q1.mean().detach().cpu().numpy(), self.t, time.time())
-            logger.add_scalar('alg/qf2', q2.mean().detach().cpu().numpy(), self.t, time.time())
+                    "alg/entropy",
+                    -torch.mean(logp.detach()).cpu().numpy().item(),
+                    self.t,
+                    time.time(),
+                )
+            logger.add_scalar("loss/qf1", qf1_loss, self.t, time.time())
+            logger.add_scalar("loss/qf2", qf2_loss, self.t, time.time())
+            logger.add_scalar(
+                "alg/qf1", q1.mean().detach().cpu().numpy(), self.t, time.time()
+            )
+            logger.add_scalar(
+                "alg/qf2", q2.mean().detach().cpu().numpy(), self.t, time.time()
+            )
         return pi_loss, qf1_loss, qf2_loss
 
     def step(self):
         """Step optimization."""
         self.t += self.data_manager.step_until_update()
         if self.t % self.target_update_period == 0:
-            soft_target_update(self.target_qf1, self.qf1,
-                               self.target_smoothing_coef)
-            soft_target_update(self.target_qf2, self.qf2,
-                               self.target_smoothing_coef)
+            soft_target_update(self.target_qf1, self.qf1, self.target_smoothing_coef)
+            soft_target_update(self.target_qf2, self.qf2, self.target_smoothing_coef)
 
         if self.t % self.update_period == 0:
             batch = self.data_manager.sample(self.batch_size)
@@ -309,22 +330,26 @@ class ResidualSAC(Algorithm):
         misc.set_env_to_eval_mode(eval_env)
 
         # Eval policy
-        os.makedirs(os.path.join(self.logdir, 'eval'), exist_ok=True)
-        outfile = os.path.join(self.logdir, 'eval',
-                               self.ckptr.format.format(self.t) + '.json')
-        stats = rl_evaluate(eval_env, self.pi, self.eval_num_episodes,
-                            outfile, self.device)
-        logger.add_scalar('eval/mean_episode_reward', stats['mean_reward'],
-                          self.t, time.time())
-        logger.add_scalar('eval/mean_episode_length', stats['mean_length'],
-                          self.t, time.time())
+        os.makedirs(os.path.join(self.logdir, "eval"), exist_ok=True)
+        outfile = os.path.join(
+            self.logdir, "eval", self.ckptr.format.format(self.t) + ".json"
+        )
+        stats = rl_evaluate(
+            eval_env, self.pi, self.eval_num_episodes, outfile, self.device
+        )
+        logger.add_scalar(
+            "eval/mean_episode_reward", stats["mean_reward"], self.t, time.time()
+        )
+        logger.add_scalar(
+            "eval/mean_episode_length", stats["mean_length"], self.t, time.time()
+        )
 
         # Record policy
-        os.makedirs(os.path.join(self.logdir, 'video'), exist_ok=True)
-        outfile = os.path.join(self.logdir, 'video',
-                               self.ckptr.format.format(self.t) + '.mp4')
-        rl_record(eval_env, self.pi, self.record_num_episodes, outfile,
-                  self.device)
+        os.makedirs(os.path.join(self.logdir, "video"), exist_ok=True)
+        outfile = os.path.join(
+            self.logdir, "video", self.ckptr.format.format(self.t) + ".mp4"
+        )
+        rl_record(eval_env, self.pi, self.record_num_episodes, outfile, self.device)
 
         self.pi.train()
         misc.set_env_to_train_mode(self.env)
@@ -333,30 +358,31 @@ class ResidualSAC(Algorithm):
     def save(self):
         """Save."""
         state_dict = {
-            'pi': self.pi.state_dict(),
-            'qf1': self.qf1.state_dict(),
-            'qf2': self.qf2.state_dict(),
-            'target_qf1': self.target_qf1.state_dict(),
-            'target_qf2': self.target_qf2.state_dict(),
-            'opt_pi': self.opt_pi.state_dict(),
-            'opt_qf1': self.opt_qf1.state_dict(),
-            'opt_qf2': self.opt_qf2.state_dict(),
-            'log_alpha': (self.log_alpha if self.automatic_entropy_tuning
-                          else None),
-            'opt_alpha': (self.opt_alpha.state_dict()
-                          if self.automatic_entropy_tuning else None),
-            'env': misc.env_state_dict(self.env),
-            'actor': self.actor.state_dict(),
-            't': self.t
+            "pi": self.pi.state_dict(),
+            "qf1": self.qf1.state_dict(),
+            "qf2": self.qf2.state_dict(),
+            "target_qf1": self.target_qf1.state_dict(),
+            "target_qf2": self.target_qf2.state_dict(),
+            "opt_pi": self.opt_pi.state_dict(),
+            "opt_qf1": self.opt_qf1.state_dict(),
+            "opt_qf2": self.opt_qf2.state_dict(),
+            "log_alpha": (self.log_alpha if self.automatic_entropy_tuning else None),
+            "opt_alpha": (
+                self.opt_alpha.state_dict() if self.automatic_entropy_tuning else None
+            ),
+            "env": misc.env_state_dict(self.env),
+            "actor": self.actor.state_dict(),
+            "t": self.t,
         }
         buffer_dict = self.buffer.state_dict()
-        state_dict['buffer_format'] = nest.get_structure(buffer_dict)
+        state_dict["buffer_format"] = nest.get_structure(buffer_dict)
         self.ckptr.save(state_dict, self.t)
 
         # save buffer seperately and only once (because it can be huge)
-        np.savez(os.path.join(self.ckptr.ckptdir, 'buffer.npz'),
-                 **{f'{i:04d}': x for i, x in
-                    enumerate(nest.flatten(buffer_dict))})
+        np.savez(
+            os.path.join(self.ckptr.ckptdir, "buffer.npz"),
+            **{f"{i:04d}": x for i, x in enumerate(nest.flatten(buffer_dict))},
+        )
 
     def load(self, t=None):
         """Load."""
@@ -364,32 +390,35 @@ class ResidualSAC(Algorithm):
         if state_dict is None:
             self.t = 0
             return self.t
-        self.pi.load_state_dict(state_dict['pi'])
-        self.qf1.load_state_dict(state_dict['qf1'])
-        self.qf2.load_state_dict(state_dict['qf2'])
-        self.target_qf1.load_state_dict(state_dict['target_qf1'])
-        self.target_qf2.load_state_dict(state_dict['target_qf2'])
+        self.pi.load_state_dict(state_dict["pi"])
+        self.qf1.load_state_dict(state_dict["qf1"])
+        self.qf2.load_state_dict(state_dict["qf2"])
+        self.target_qf1.load_state_dict(state_dict["target_qf1"])
+        self.target_qf2.load_state_dict(state_dict["target_qf2"])
 
-        self.opt_pi.load_state_dict(state_dict['opt_pi'])
-        self.opt_qf1.load_state_dict(state_dict['opt_qf1'])
-        self.opt_qf2.load_state_dict(state_dict['opt_qf2'])
+        self.opt_pi.load_state_dict(state_dict["opt_pi"])
+        self.opt_qf1.load_state_dict(state_dict["opt_qf1"])
+        self.opt_qf2.load_state_dict(state_dict["opt_qf2"])
 
-        if state_dict['log_alpha']:
+        if state_dict["log_alpha"]:
             with torch.no_grad():
-                self.log_alpha.copy_(state_dict['log_alpha'])
-            self.opt_alpha.load_state_dict(state_dict['opt_alpha'])
-        misc.env_load_state_dict(self.env, state_dict['env'])
-        self.actor.load_state_dict(state_dict['actor'])
-        self.t = state_dict['t']
+                self.log_alpha.copy_(state_dict["log_alpha"])
+            self.opt_alpha.load_state_dict(state_dict["opt_alpha"])
+        misc.env_load_state_dict(self.env, state_dict["env"])
+        self.actor.load_state_dict(state_dict["actor"])
+        self.t = state_dict["t"]
 
-        if os.path.exists(os.path.join(self.ckptr.ckptdir, 'buffer.npz')):
-            buffer_format = state_dict['buffer_format']
-            buffer_state = dict(np.load(os.path.join(self.ckptr.ckptdir,
-                                                     'buffer.npz'),
-                                        allow_pickle=True))
+        if os.path.exists(os.path.join(self.ckptr.ckptdir, "buffer.npz")):
+            buffer_format = state_dict["buffer_format"]
+            buffer_state = dict(
+                np.load(
+                    os.path.join(self.ckptr.ckptdir, "buffer.npz"), allow_pickle=True
+                )
+            )
             buffer_state = nest.flatten(buffer_state)
-            self.buffer.load_state_dict(nest.pack_sequence_as(buffer_state,
-                                                              buffer_format))
+            self.buffer.load_state_dict(
+                nest.pack_sequence_as(buffer_state, buffer_format)
+            )
             self.data_manager.manual_reset()
         return self.t
 
