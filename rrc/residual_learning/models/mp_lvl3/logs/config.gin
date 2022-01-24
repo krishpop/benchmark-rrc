@@ -1,9 +1,9 @@
-import residual_learning.make_training_env
-import residual_learning.networks
-import residual_learning.residual_sac
-import residual_learning.state_machines
-import cic.states.custom_state_machines
-import cpc.state_machine
+import rrc.residual_learning.make_training_env
+import rrc.residual_learning.networks
+import rrc.residual_learning.residual_sac
+import rrc.residual_learning.state_machines
+import rrc.cic.states.custom_state_machines
+import rrc.cpc.state_machine
 
 # Macros:
 # ==============================================================================

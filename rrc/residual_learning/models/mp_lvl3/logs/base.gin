@@ -1,9 +1,9 @@
-import residual_learning.residual_sac
-import residual_learning.networks
-import residual_learning.state_machines
-import residual_learning.make_training_env
-import cpc.state_machine
-import cic.states.custom_state_machines
+import rrc.residual_learning.residual_sac
+import rrc.residual_learning.networks
+import rrc.residual_learning.state_machines
+import rrc.residual_learning.make_training_env
+import rrc.cpc.state_machine
+import rrc.cic.states.custom_state_machines
 
 train.algorithm = @ResidualSAC
 train.maxt = 1000000
