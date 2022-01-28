@@ -218,6 +218,10 @@ class CenteredInitializer:
     def get_goal(self):
         """Get a random goal depending on the difficulty."""
         goal = move_cube.sample_goal(difficulty=self.difficulty)
+        if self.difficulty == 4 and self.object_shape != "cube":
+            goal.orientation = Rotation.from_euler(
+                "xyz", np.random.uniform(-np.pi / 6, np.pi / 6, 3)
+            ).as_quat()
         width = CUBE_HALF_WIDTH if self.object_shape == "cube" else CUBOID_HALF_WIDTH
         goal.position[-1] = max(goal.position[-1], width)
         return goal

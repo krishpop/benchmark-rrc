@@ -1281,18 +1281,18 @@ class RotateCubeFloorPrimitive(State):
         self.kinematics = kinematics
         self.params = params
 
-        self.grasp_xy = self.params.grasp_xy_rotate_ground
-        self.grasp_h = self.params.grasp_h_rotate_ground
+        self.grasp_xy = self.params.grasp_xy_rotate_floor
+        self.grasp_h = self.params.grasp_h_rotate_floor
         self.gain_xy = 0.0
         self.gain_z = 0.0
-        self.gain_xy_pre = self.params.gain_xy_pre_rotate_ground
-        self.gain_z_pre = self.params.gain_z_pre_rotate_ground
-        self.init_dur = self.params.init_dur_rotate_ground
-        self.gain_xy_final = self.params.gain_xy_final_rotate_ground
-        self.gain_z_final = self.params.gain_z_final_rotate_ground
-        self.pos_gain_impedance = self.params.pos_gain_impedance_rotate_ground
+        self.gain_xy_pre = self.params.gain_xy_pre_rotate_floor
+        self.gain_z_pre = self.params.gain_z_pre_rotate_floor
+        self.init_dur = self.params.init_dur_rotate_floor
+        self.gain_xy_final = self.params.gain_xy_final_rotate_floor
+        self.gain_z_final = self.params.gain_z_final_rotate_floor
+        self.pos_gain_impedance = self.params.pos_gain_impedance_rotate_floor
         self.pos_gain = 0.0
-        self.force_factor = self.params.force_factor_rotate_ground
+        self.force_factor = self.params.force_factor_rotate_floor
         self.force_factor_ground_rot = self.params.force_factor_ground_rot_rotate_ground
 
         self.duration = 5000

@@ -23,6 +23,7 @@ def test_cube_env(
     impedance,
     traj_opt,
     object_shape="cube",
+    n_steps=10000,
 ):
     if logdir:
         path = osp.join(osp.split(osp.abspath(__file__))[0], logdir)
@@ -55,7 +56,7 @@ def test_cube_env(
             path=path,
             force_factor=1.0,
             torque_factor=0.1,
-            episode_length=1000,
+            episode_length=n_steps,
             use_actual_cp=use_actual_cp,
             use_impedance=impedance,
             object_shape=object_shape,
@@ -103,7 +104,7 @@ def test_cube_env(
     ft_vel_traj = np.asarray(ft_vels)
     x_traj = np.asarray(dxs)
     np.savez(
-        "test_ki_{}{}.npz".format(ki, int_freq),
+        osp.join(env.path, "test_ki_{}{}.npz".format(ki, int_freq)),
         ft_wf_traj=ft_wf_traj,
         dx_traj=dx_traj,
         ft_vel_traj=ft_vel_traj,
@@ -113,9 +114,15 @@ def test_cube_env(
     data = extract_data(
         osp.join(env.path, "custom_data"), keys=["des_tip_forces", "obs_tip_forces"]
     )
-    viz_utils.plot_3f_des_obs_data(data["des_tip_forces"], data["obs_tip_forces"])
+    viz_utils.plot_3f_des_obs_data(
+        data["des_tip_forces"],
+        data["obs_tip_forces"],
+        show=False,
+        savepath=osp.join(env.path, "grasp_forces"),
+    )
     # d0 = np.load(osp.join(osp.split(osp.abspath(__file__))[0], "test.npz"))
     # viz_utils.plot_3f_des_obs_data(d0["ft_wf_traj"], ft_wf_traj, title="ft_pos_wf")
+    env.close()
 
 
 def extract_data(filepath, keys):
@@ -144,6 +151,7 @@ def main(
     impedance,
     traj_opt,
     object_shape,
+    n_steps=10000,
 ):
     if policy == "lift":
         ac = np.array([0, 0, 0.9, 0, 0, 0])
@@ -178,6 +186,7 @@ def main(
         impedance,
         traj_opt,
         object_shape,
+        n_steps=n_steps,
     )
 
 
@@ -198,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--impedance", action="store_true")
     parser.add_argument("--traj_opt", action="store_true")
     parser.add_argument("--object", default="cube")
+    parser.add_argument("--n_steps", "--n", default=10000)
     args = parser.parse_args()
     pd_kwargs = dict(Kp=args.kp, Kd=args.kd)
     main(
@@ -213,4 +223,5 @@ if __name__ == "__main__":
         args.impedance,
         args.traj_opt,
         object_shape=args.object,
+        n_steps=args.n_steps,
     )

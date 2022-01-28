@@ -14,7 +14,6 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.policies import register_policy
-from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
 
 class WandbEvalCallback(EvalCallback):
@@ -76,7 +75,7 @@ class LogEpInfoCallback(BaseCallback):
     def _on_rollout_end(self):
         self.ep_count += 1
 
-    def init_callback(self, model: "base_class.BaseAlgorithm"):
+    def init_callback(self, model="base_class.BaseAlgorithm"):
         super(LogEpInfoCallback, self).init_callback(model)
         self.ep_info_buffer = model.ep_info_buffer
 

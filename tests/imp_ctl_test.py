@@ -6,7 +6,6 @@ dummy policy which uses random actions.
 import json
 import os
 import os.path as osp
-import sys
 
 import numpy as np
 from rrc.env import cube_env, initializers, termination_fns
@@ -34,8 +33,6 @@ class RandomPolicy:
 def main(difficulty, goal_pose_json, object_shape):
     # the difficulty level and the goal pose (as JSON string) are passed as
     # arguments
-    # difficulty = int(sys.argv[1])
-    # goal_pose_json = sys.argv[2]
     if os.path.exists(goal_pose_json):
         with open(goal_pose_json) as f:
             goal = json.load(f)["goal"]
@@ -90,6 +87,7 @@ def main(difficulty, goal_pose_json, object_shape):
             goal_pose,
             difficulty=difficulty,
             save_path=path,
+            ycb=(object_shape == "ycb"),
         )
 
     observation = env.reset()

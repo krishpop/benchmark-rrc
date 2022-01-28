@@ -1970,7 +1970,9 @@ class RobotWrenchCubeEnv(RealRobotCubeEnv):
         finger_contact_states = [
             p.getContactPoints(
                 bodyA=self.platform.simfinger.finger_id,
+                bodyB=self.platform.cube.block,
                 linkIndexA=tip,
+                linkIndexB=-1,
                 physicsClientId=self.platform.simfinger._pybullet_client_id,
             )
             for tip in self.platform.simfinger.pybullet_tip_link_indices

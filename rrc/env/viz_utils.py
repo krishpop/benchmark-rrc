@@ -18,7 +18,12 @@ DEFAULT_DATA_LABELS = ["normal", "latfric1", "latfric2"]
 
 
 def plot_3f_des_obs_data(
-    des_data, obs_data, line_labels=DEFAULT_OBSDES_LABELS, title="tip_forces"
+    des_data,
+    obs_data,
+    line_labels=DEFAULT_OBSDES_LABELS,
+    title="tip_forces",
+    show=False,
+    savepath=None,
 ):
     # Plots 3-Finger desired and observed data
     des_color, obs_color = ["b", "orange", "g"], [
@@ -64,10 +69,15 @@ def plot_3f_des_obs_data(
         labelspacing=0.0,
         prop={"size": 13},
     )
-    plt.show()
+    if show:
+        plt.show()
+    if savepath is not None:
+        plt.savefig(savepath)
 
 
-def plot_3f_data(data, line_labels=DEFAULT_DATA_LABELS, title="torques"):
+def plot_3f_data(
+    data, line_labels=DEFAULT_DATA_LABELS, title="torques", show=False, savepath=None
+):
     # Plots 3-Finger desired and observed data
     assert data.shape[1] == 9, "data needs to be 9D"
     color = ["b", "orange", "g"]  # solid and dashed line colors
@@ -92,6 +102,10 @@ def plot_3f_data(data, line_labels=DEFAULT_DATA_LABELS, title="torques"):
         labelspacing=0.0,
         prop={"size": 13},
     )
+    if show:
+        plt.show()
+    if savepath is not None:
+        plt.savefig(savepath)
 
 
 def get_keys(output_dir):

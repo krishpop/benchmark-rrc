@@ -9,13 +9,20 @@ import gym
 import numpy as np
 import pybullet as p
 import trifinger_simulation
-from rrc.mp.const import CUBOID_MASS, CUBOID_SIZE, CUSTOM_LOGDIR, INIT_JOINT_CONF
+from rrc.mp.const import (
+    CUBOID_MASS,
+    CUBOID_SIZE,
+    CUSTOM_LOGDIR,
+    INIT_JOINT_CONF,
+    CUBE_MASS,
+    CUBE_WIDTH,
+)
 from trifinger_simulation import trifingerpro_limits
 from trifinger_simulation.tasks import move_cube
 
 from .pinocchio_utils import PinocchioUtils
 from .reward_fns import competition_reward
-from .viz import CuboidMarker, Viz
+from .viz import CuboidMarker, CubeMarker, Viz
 
 try:
     import robot_fingers
@@ -63,6 +70,7 @@ class RealRobotCubeEnv(gym.GoalEnv):
         initializer: callable = None,
         episode_length: int = move_cube.episode_length,
         path: str = None,
+        object_shape: str = "cube",
     ):
         """Initialize.
 
@@ -330,23 +338,24 @@ class RealRobotCubeEnv(gym.GoalEnv):
             initial_object_pose = move_cube.sample_goal(difficulty=-1)
         else:
             initial_object_pose = self.initializer.get_initial_state()
-            self.goal = self.initializer.get_goal().to_dict()
+            # self.goal = self.initializer.get_goal().to_dict()
         self.platform = trifinger_simulation.TriFingerPlatform(
             visualization=self.visualization,
             initial_object_pose=initial_object_pose,
+            object_shape=self.object_shape,
         )
         # use mass of real cube
         p.changeDynamics(
             bodyUniqueId=self.platform.cube.block,
             linkIndex=-1,
             physicsClientId=self.platform.simfinger._pybullet_client_id,
-            mass=CUBOID_MASS,
+            mass=CUBE_MASS,
         )
         # p.setTimeStep(0.001)
         # visualize the goal
         if self.visualization:
-            self.goal_marker = CuboidMarker(
-                size=CUBOID_SIZE,
+            self.goal_marker = CubeMarker(
+                width=CUBE_WIDTH,
                 position=self.goal["position"],
                 orientation=self.goal["orientation"],
                 pybullet_client_id=self.platform.simfinger._pybullet_client_id,

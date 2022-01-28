@@ -61,6 +61,7 @@ def make_env(
     goal_difficulty,
     action_space,
     frameskip=1,
+    object_shape="cube",
     sim=False,
     visualization=False,
     reward_fn=None,
@@ -102,6 +103,7 @@ def make_env(
             initializer=initializer,
             episode_length=episode_length,
             path=path,
+            object_shape=object_shape,
         )
     else:
         env = RobotCubeEnv(
@@ -161,7 +163,7 @@ def make_env_cls(
         initializer = get_initializer(initializer)(diff)
 
     env_cls = functools.partial(
-        cube_env.RobotCubeEnv,
+        cube_env.RobotWrenchCubeEnv,
         cube_goal_pose=None,
         goal_difficulty=diff,
         initializer=initializer,

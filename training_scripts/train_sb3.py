@@ -10,7 +10,11 @@ from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from .training_utils import WandbEvalCallback, LogEpInfoCallback, HERCombinedExtractor
+from rrc.models.model_utils import (
+    WandbEvalCallback,
+    LogEpInfoCallback,
+    HERCombinedExtractor,
+)
 
 import wandb
 
